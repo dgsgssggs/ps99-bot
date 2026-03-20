@@ -96,13 +96,16 @@ async def get_price_usd(coin: str) -> float:
 async def check_sol_transactions(address: str) -> list:
     """Busca txs SOL entrantes via Helius Enhanced Transactions API."""
     if not HELIUS_API_KEY:
+        print(f"[SOL Scanner] ❌ HELIUS_API_KEY no configurada en Railway")
         return []
     url    = f"https://api.helius.xyz/v0/addresses/{address}/transactions"
     params = {"api-key": HELIUS_API_KEY, "limit": 10, "type": "TRANSFER"}
     try:
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.get(url, params=params)
+            print(f"[SOL Scanner] Helius response: {r.status_code} para {address[:16]}...")
             if r.status_code != 200:
+                print(f"[SOL Scanner] ❌ Helius error: {r.text[:200]}")
                 return []
             results = []
             for tx in r.json():
@@ -495,15 +498,21 @@ class Crypto(commands.Cog):
         """Detecta txs nuevas, acredita gemas y hace sweep."""
         db           = self.bot.db
         wallets      = await db.get_all_wallets(coin)
+
+        print(f"[{coin} Scanner] Revisando {len(wallets)} wallet(s)...")
+
         if not wallets:
+            print(f"[{coin} Scanner] Sin wallets en DB — espera a que alguien use /deposit_crypto")
             return
 
         price_usd    = await get_price_usd(coin)
         gems_per_usd = int(await db.get_config("gems_per_usd") or GEMS_PER_USD)
         hot_wallet   = HOT_WALLET_SOL if coin == "SOL" else HOT_WALLET_LTC
 
+        print(f"[{coin} Scanner] Precio: ${price_usd:.2f} | Ratio: {gems_per_usd}/USD | Hot wallet: {'✅' if hot_wallet else '❌ NO CONFIGURADA'}")
+
         if price_usd <= 0:
-            print(f"[{coin}] No se pudo obtener precio de CoinGecko")
+            print(f"[{coin} Scanner] ❌ CoinGecko no devolvió precio — reintentando en 30s")
             return
 
         for wallet in wallets:
@@ -514,16 +523,26 @@ class Crypto(commands.Cog):
             txs = await check_sol_transactions(address) if coin == "SOL" \
                   else await check_ltc_transactions(address)
 
+            print(f"[{coin} Scanner] {address[:16]}... → {len(txs)} tx(s) encontradas")
+
             for tx in txs:
                 tx_hash = tx.get("tx_hash")
-                if not tx_hash or await db.has_crypto_tx(tx_hash):
+                if not tx_hash:
+                    continue
+
+                already = await db.has_crypto_tx(tx_hash)
+                if already:
+                    print(f"[{coin} Scanner] TX {tx_hash[:16]}... ya procesada, saltando")
                     continue
 
                 amount     = tx["amount"]
                 amount_usd = amount * price_usd
                 gems       = int(amount_usd * gems_per_usd)
 
+                print(f"[{coin} Scanner] 🆕 Nueva TX: {amount:.6f} {coin} = ${amount_usd:.2f} = {gems:,} gemas")
+
                 if gems <= 0:
+                    print(f"[{coin} Scanner] ⚠️ Gemas calculadas = 0, revisa GEMS_PER_USD")
                     continue
 
                 # 1. Acredita gemas
