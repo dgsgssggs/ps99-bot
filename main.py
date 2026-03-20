@@ -9,6 +9,8 @@ import discord                          # Librería principal de Discord
 from discord.ext import commands        # Sistema de comandos y slash commands
 import asyncio                          # Para operaciones asíncronas
 import os                               # Para leer variables de entorno
+import threading                        # Para correr el servidor HTTP en paralelo
+from http.server import HTTPServer, BaseHTTPRequestHandler  # Servidor HTTP minimal
 from dotenv import load_dotenv          # Para cargar el archivo .env
 from database import Database           # Nuestra clase de base de datos
 
@@ -60,6 +62,24 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Error al sincronizar comandos: {e}")
 
+# ── Servidor HTTP para Railway health check ──────────────────
+# Railway requiere que el proceso web responda en el puerto 8080.
+# Este mini servidor responde con 200 OK para que Railway no lo mate.
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+    def log_message(self, format, *args):
+        pass  # Silencia los logs del servidor HTTP
+
+def start_health_server():
+    """Arranca el servidor HTTP en un hilo separado."""
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    print(f"🌐 Health server corriendo en puerto {port}")
+    server.serve_forever()
+
 # ── Función principal asíncrona ───────────────────────────────
 async def main():
     """Carga todos los módulos e inicia el bot."""
@@ -75,6 +95,10 @@ async def main():
     token = os.getenv("DISCORD_TOKEN")              # Lee DISCORD_TOKEN del .env
     if not token:
         raise ValueError("❌ No se encontró DISCORD_TOKEN en el archivo .env")
+
+    # Arranca el servidor HTTP en un hilo separado (no bloquea el bot)
+    health_thread = threading.Thread(target=start_health_server, daemon=True)
+    health_thread.start()
 
     await bot.start(token)                          # Inicia la conexión con Discord
 
