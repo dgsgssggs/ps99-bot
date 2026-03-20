@@ -1,0 +1,542 @@
+# ============================================================
+# cogs/economy.py — Sistema económico completo
+# ============================================================
+# Comandos: /link, /balance, /deposit, /withdraw
+# También incluye botones para que los agentes confirmen
+# depósitos y retiros desde los tickets generados.
+# ============================================================
+
+import discord                                  # Librería de Discord
+from discord.ext import commands                # Comandos de discord.py
+from discord import app_commands               # Slash commands
+import os                                       # Variables de entorno
+from utils import (
+    check_linked, check_balance,
+    fmt_gems, fmt,
+    error_embed, success_embed,
+    COLOR_INFO, COLOR_PURPLE, COLOR_SUCCESS, COLOR_ERROR
+)
+
+# ── Vista del botón Reclamar Rakeback ────────────────────────
+class RakebackView(discord.ui.View):
+    """Vista con el botón interactivo para reclamar el rakeback pendiente."""
+
+    def __init__(self, user_id: str, amount: int, pct: float, db):
+        super().__init__(timeout=60)
+        self.user_id = user_id
+        self.amount  = amount
+        self.pct     = pct
+        self.db      = db
+        # Desactiva el botón si no hay nada que reclamar
+        if amount <= 0:
+            for item in self.children:
+                item.disabled = True
+
+    @discord.ui.button(label="💸 Reclamar", style=discord.ButtonStyle.success)
+    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Reclama el rakeback y lo añade al balance del usuario."""
+        if str(interaction.user.id) != self.user_id:
+            await interaction.response.send_message("Este no es tu rakeback.", ephemeral=True)
+            return
+
+        # Recarga el amount por si cambió desde que se abrió el menú
+        amount = await self.db.get_rakeback(self.user_id)
+        if amount <= 0:
+            await interaction.response.send_message(
+                embed=discord.Embed(
+                    description="❌ No tienes rakeback acumulado.",
+                    color=0xE74C3C
+                ),
+                ephemeral=True
+            )
+            return
+
+        # Ejecuta el claim: añade al balance y resetea a 0
+        claimed = await self.db.claim_rakeback(self.user_id)
+        new_bal = await self.db.get_balance(self.user_id)
+
+        # Desactiva el botón tras reclamar
+        button.disabled = True
+        button.label    = "✅ Reclamado"
+
+        embed = discord.Embed(
+            title="✅ Rakeback Reclamado",
+            description=(
+                f"Se añadieron {fmt_gems(claimed)} a tu balance.\n"
+                f"Porcentaje: **{self.pct}%** de tus pérdidas."
+            ),
+            color=0x2ECC71
+        )
+        embed.set_footer(text=f"Saldo actual: {fmt_gems(new_bal)}")
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class ConfirmDepositView(discord.ui.View):
+    """
+    Vista con botones para confirmar o rechazar un depósito.
+    Aparece en el canal de tickets de depósitos.
+    """
+
+    def __init__(self, tx_id: int, user_id: str, amount: int):
+        super().__init__(timeout=None)          # Sin tiempo de expiración
+        self.tx_id   = tx_id                   # ID de la transacción
+        self.user_id = user_id                 # ID del usuario que depositó
+        self.amount  = amount                  # Cantidad a depositar
+
+    @discord.ui.button(label="✅ Confirmar Depósito", style=discord.ButtonStyle.green)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Botón que confirma el depósito. Solo agentes con límite suficiente."""
+        db = interaction.client.db                          # Base de datos
+
+        # Verifica que quien confirma es un agente registrado
+        agent = await db.get_agent(str(interaction.user.id))
+        if not agent:
+            await interaction.response.send_message(
+                embed=error_embed("No tienes permisos de agente."),
+                ephemeral=True
+            )
+            return
+
+        # Verifica que el agente tiene límite suficiente
+        ok = await db.use_agent_limit(str(interaction.user.id), self.amount)
+        if not ok:
+            available = agent["limit_total"] - agent["limit_used"]
+            await interaction.response.send_message(
+                embed=error_embed(
+                    f"No tienes suficiente límite disponible.\n"
+                    f"Límite disponible: {fmt_gems(available)}\n"
+                    f"Se requieren: {fmt_gems(self.amount)}"
+                ),
+                ephemeral=True
+            )
+            return
+
+        # Añade el saldo al usuario
+        await db.add_balance(self.user_id, self.amount)
+
+        # Registra la transacción como confirmada
+        await db.confirm_transaction(self.tx_id, str(interaction.user.id))
+
+        # Registra en el canal de logs si está configurado
+        log_channel_id = await db.get_config("log_channel")
+        if log_channel_id:
+            log_channel = interaction.guild.get_channel(int(log_channel_id))
+            if log_channel:
+                log_embed = discord.Embed(
+                    title="📥 Depósito Confirmado",
+                    color=COLOR_SUCCESS
+                )
+                log_embed.add_field(name="Usuario",    value=f"<@{self.user_id}>", inline=True)
+                log_embed.add_field(name="Cantidad",   value=fmt_gems(self.amount), inline=True)
+                log_embed.add_field(name="Agente",     value=interaction.user.mention, inline=True)
+                log_embed.add_field(name="TX ID",      value=f"#{self.tx_id}", inline=True)
+                await log_channel.send(embed=log_embed)
+
+        # Actualiza el mensaje del ticket
+        for child in self.children:
+            child.disabled = True               # Desactiva todos los botones
+        await interaction.message.edit(view=self)
+
+        await interaction.response.send_message(
+            embed=success_embed(
+                "Depósito Confirmado",
+                f"Se han añadido {fmt_gems(self.amount)} a <@{self.user_id}>."
+            )
+        )
+
+        # Notifica al usuario por DM
+        try:
+            user = await interaction.client.fetch_user(int(self.user_id))
+            await user.send(
+                embed=success_embed(
+                    "Depósito Confirmado",
+                    f"Tu depósito de {fmt_gems(self.amount)} ha sido procesado. ✅"
+                )
+            )
+        except Exception:
+            pass                                # Ignora si no se pueden enviar DMs
+
+    @discord.ui.button(label="❌ Rechazar", style=discord.ButtonStyle.red)
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Botón para rechazar el depósito."""
+        # Desactiva los botones
+        for child in self.children:
+            child.disabled = True
+        await interaction.message.edit(view=self)
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"❌ Depósito #{self.tx_id} rechazado por {interaction.user.mention}.",
+                color=COLOR_ERROR
+            )
+        )
+
+
+class ConfirmWithdrawView(discord.ui.View):
+    """
+    Vista con botones para confirmar o rechazar un retiro.
+    Aparece en el canal de tickets de retiros.
+    """
+
+    def __init__(self, tx_id: int, user_id: str, amount: int):
+        super().__init__(timeout=None)
+        self.tx_id   = tx_id
+        self.user_id = user_id
+        self.amount  = amount
+
+    @discord.ui.button(label="✅ Confirmar Retiro", style=discord.ButtonStyle.green)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Confirma el retiro y descuenta el saldo."""
+        db = interaction.client.db
+
+        # Verifica que es agente
+        agent = await db.get_agent(str(interaction.user.id))
+        if not agent:
+            await interaction.response.send_message(
+                embed=error_embed("No tienes permisos de agente."), ephemeral=True
+            )
+            return
+
+        # Confirma la transacción en la base de datos
+        await db.confirm_transaction(self.tx_id, str(interaction.user.id))
+
+        # Registra en logs
+        log_channel_id = await db.get_config("log_channel")
+        if log_channel_id:
+            log_channel = interaction.guild.get_channel(int(log_channel_id))
+            if log_channel:
+                log_embed = discord.Embed(title="📤 Retiro Confirmado", color=COLOR_SUCCESS)
+                log_embed.add_field(name="Usuario",  value=f"<@{self.user_id}>", inline=True)
+                log_embed.add_field(name="Cantidad", value=fmt_gems(self.amount), inline=True)
+                log_embed.add_field(name="Agente",   value=interaction.user.mention, inline=True)
+                await log_channel.send(embed=log_embed)
+
+        for child in self.children:
+            child.disabled = True
+        await interaction.message.edit(view=self)
+
+        await interaction.response.send_message(
+            embed=success_embed("Retiro Confirmado", f"Retiro de {fmt_gems(self.amount)} procesado.")
+        )
+
+    @discord.ui.button(label="❌ Rechazar", style=discord.ButtonStyle.red)
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Rechaza el retiro y devuelve el saldo al usuario."""
+        db = interaction.client.db
+
+        # Devuelve el saldo que se descontó al crear el ticket
+        await db.add_balance(self.user_id, self.amount)
+
+        for child in self.children:
+            child.disabled = True
+        await interaction.message.edit(view=self)
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description=f"❌ Retiro rechazado. Se devolvieron {fmt_gems(self.amount)} a <@{self.user_id}>.",
+                color=COLOR_ERROR
+            )
+        )
+
+
+# ── COG PRINCIPAL DE ECONOMÍA ─────────────────────────────────
+class Economy(commands.Cog):
+    """Módulo de economía: vinculación, balance, depósitos y retiros."""
+
+    def __init__(self, bot):
+        self.bot = bot                          # Referencia al bot principal
+
+    # ── /link ─────────────────────────────────────────────────
+    @app_commands.command(name="link", description="Vincula tu cuenta de Roblox al bot")
+    @app_commands.describe(usuario_roblox="Tu nombre de usuario en Roblox")
+    async def link(self, interaction: discord.Interaction, usuario_roblox: str):
+        """Vincula la cuenta de Discord del usuario con su nombre de Roblox."""
+        db = self.bot.db                        # Base de datos
+        user_id = str(interaction.user.id)      # ID de Discord como string
+
+        existing = await db.get_user(user_id)   # Busca si ya existe el usuario
+
+        if existing:
+            # Si ya existe, actualiza el nombre de Roblox
+            await db.update_roblox(user_id, usuario_roblox)
+            msg = f"Cuenta actualizada: **{usuario_roblox}**"
+        else:
+            # Si no existe, crea el usuario nuevo
+            await db.create_user(user_id, usuario_roblox)
+            msg = f"Cuenta vinculada: **{usuario_roblox}** ✅"
+
+        embed = discord.Embed(
+            title="🔗 Cuenta Vinculada",
+            description=msg,
+            color=COLOR_SUCCESS
+        )
+        embed.set_footer(text=f"Discord: {interaction.user.name}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /balance ──────────────────────────────────────────────
+    @app_commands.command(name="balance", description="Muestra tus gemas actuales")
+    async def balance(self, interaction: discord.Interaction):
+        """Muestra el balance de gemas y el total apostado del usuario."""
+        if not await check_linked(interaction):
+            return                              # Sale si no está vinculado
+
+        db      = self.bot.db
+        user_id = str(interaction.user.id)
+
+        user    = await db.get_user(user_id)    # Datos completos del usuario
+        bal     = user["balance"]               # Balance actual
+        wagered = user["total_wagered"]         # Total apostado
+
+        embed = discord.Embed(
+            title=f"💎 Balance de {interaction.user.display_name}",
+            color=COLOR_PURPLE
+        )
+        embed.add_field(name="Gemas",         value=fmt_gems(bal),     inline=True)
+        embed.add_field(name="Total Apostado",value=fmt_gems(wagered), inline=True)
+        embed.add_field(name="Roblox",        value=f"👤 {user['roblox_name']}", inline=False)
+        embed.set_thumbnail(url=interaction.user.display_avatar.url)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /deposit ──────────────────────────────────────────────
+    @app_commands.command(name="deposit", description="Solicita un depósito de gemas")
+    @app_commands.describe(cantidad="Cantidad de gemas a depositar")
+    async def deposit(self, interaction: discord.Interaction, cantidad: int):
+        """Crea un ticket de depósito para que un agente lo confirme."""
+        if not await check_linked(interaction):
+            return                              # Sale si no está vinculado
+
+        if cantidad <= 0:
+            await interaction.response.send_message(
+                embed=error_embed("La cantidad debe ser mayor a 0."), ephemeral=True
+            )
+            return
+
+        db      = self.bot.db
+        user_id = str(interaction.user.id)
+        user    = await db.get_user(user_id)
+
+        # Crea la transacción pendiente en la base de datos
+        tx_id = await db.create_transaction(user_id, "deposit", cantidad)
+
+        # Busca el canal de depósitos configurado
+        dep_channel_id = await db.get_config("deposit_channel")
+        agent_role_id  = await db.get_config("agent_role")
+
+        if not dep_channel_id:
+            await interaction.response.send_message(
+                embed=error_embed("No hay canal de depósitos configurado. Contacta al staff."),
+                ephemeral=True
+            )
+            return
+
+        dep_channel = interaction.guild.get_channel(int(dep_channel_id))
+        if not dep_channel:
+            await interaction.response.send_message(
+                embed=error_embed("Canal de depósitos no encontrado."), ephemeral=True
+            )
+            return
+
+        # Construye el embed del ticket
+        embed = discord.Embed(
+            title=f"📥 Ticket de Depósito #{tx_id}",
+            color=COLOR_INFO
+        )
+        embed.add_field(name="Usuario Discord", value=interaction.user.mention,    inline=True)
+        embed.add_field(name="Usuario Roblox",  value=user["roblox_name"],         inline=True)
+        embed.add_field(name="Cantidad",        value=fmt_gems(cantidad),           inline=True)
+        embed.add_field(name="Estado",          value="⏳ Pendiente",              inline=False)
+        embed.set_footer(text=f"TX ID: #{tx_id}")
+
+        # Menciona al rol de agentes si está configurado
+        ping = f"<@&{agent_role_id}>" if agent_role_id else "@staff"
+
+        # Envía el ticket con los botones de confirmación
+        view = ConfirmDepositView(tx_id, user_id, cantidad)
+        await dep_channel.send(content=ping, embed=embed, view=view)
+
+        # Confirma al usuario
+        await interaction.response.send_message(
+            embed=success_embed(
+                "Solicitud Enviada",
+                f"Tu solicitud de depósito de {fmt_gems(cantidad)} ha sido enviada.\n"
+                f"Un agente la procesará pronto. TX ID: **#{tx_id}**"
+            ),
+            ephemeral=True
+        )
+
+    # ── /withdraw ─────────────────────────────────────────────
+    @app_commands.command(name="withdraw", description="Solicita un retiro de gemas")
+    @app_commands.describe(cantidad="Cantidad de gemas a retirar")
+    async def withdraw(self, interaction: discord.Interaction, cantidad: int):
+        """Crea un ticket de retiro. Descuenta el saldo inmediatamente (lo devuelve si se rechaza)."""
+        if not await check_linked(interaction):
+            return
+
+        if cantidad <= 0:
+            await interaction.response.send_message(
+                embed=error_embed("La cantidad debe ser mayor a 0."), ephemeral=True
+            )
+            return
+
+        db      = self.bot.db
+        user_id = str(interaction.user.id)
+
+        # Descuenta el saldo inmediatamente para reservarlo
+        ok = await db.remove_balance(user_id, cantidad)
+        if not ok:
+            bal = await db.get_balance(user_id)
+            await interaction.response.send_message(
+                embed=error_embed(
+                    f"Saldo insuficiente.\nTienes: {fmt_gems(bal)}\nNecesitas: {fmt_gems(cantidad)}"
+                ),
+                ephemeral=True
+            )
+            return
+
+        user  = await db.get_user(user_id)
+        tx_id = await db.create_transaction(user_id, "withdraw", cantidad)
+
+        # Busca el canal de retiros
+        ret_channel_id = await db.get_config("withdraw_channel")
+        agent_role_id  = await db.get_config("agent_role")
+
+        if not ret_channel_id:
+            # Si no hay canal, devuelve el saldo
+            await db.add_balance(user_id, cantidad)
+            await interaction.response.send_message(
+                embed=error_embed("No hay canal de retiros configurado."), ephemeral=True
+            )
+            return
+
+        ret_channel = interaction.guild.get_channel(int(ret_channel_id))
+
+        # Crea el embed del ticket de retiro
+        embed = discord.Embed(
+            title=f"📤 Ticket de Retiro #{tx_id}",
+            color=COLOR_ORANGE if True else None    # Color naranja para retiros
+        )
+        embed.color = 0xE67E22                      # Naranja
+        embed.add_field(name="Usuario Discord", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Usuario Roblox",  value=user["roblox_name"],      inline=True)
+        embed.add_field(name="Cantidad",        value=fmt_gems(cantidad),        inline=True)
+
+        ping = f"<@&{agent_role_id}>" if agent_role_id else "@staff"
+        view = ConfirmWithdrawView(tx_id, user_id, cantidad)
+        await ret_channel.send(content=ping, embed=embed, view=view)
+
+        await interaction.response.send_message(
+            embed=success_embed(
+                "Solicitud de Retiro Enviada",
+                f"Tu solicitud de retiro de {fmt_gems(cantidad)} ha sido enviada.\n"
+                f"TX ID: **#{tx_id}**"
+            ),
+            ephemeral=True
+        )
+
+
+    # ── /tip ──────────────────────────────────────────────────
+    @app_commands.command(name="tip", description="Envía gemas a otro usuario")
+    @app_commands.describe(
+        usuario="El usuario que recibirá las gemas",
+        cantidad="Cantidad de gemas a enviar"
+    )
+    async def tip(self, interaction: discord.Interaction, usuario: discord.Member, cantidad: int):
+        """Transfiere gemas de tu balance al de otro usuario."""
+        if not await check_linked(interaction):
+            return
+
+        if usuario.id == interaction.user.id:
+            await interaction.response.send_message(
+                embed=error_embed("No puedes enviarte gemas a ti mismo."), ephemeral=True
+            )
+            return
+
+        if cantidad <= 0:
+            await interaction.response.send_message(
+                embed=error_embed("La cantidad debe ser mayor a 0."), ephemeral=True
+            )
+            return
+
+        db          = self.bot.db
+        sender_id   = str(interaction.user.id)
+        receiver_id = str(usuario.id)
+
+        # Verifica que el receptor tiene cuenta
+        receiver = await db.get_user(receiver_id)
+        if not receiver:
+            await interaction.response.send_message(
+                embed=error_embed(f"{usuario.display_name} no tiene cuenta vinculada."),
+                ephemeral=True
+            )
+            return
+
+        # Descuenta del emisor
+        ok = await db.remove_balance(sender_id, cantidad)
+        if not ok:
+            bal = await db.get_balance(sender_id)
+            await interaction.response.send_message(
+                embed=error_embed(
+                    f"Saldo insuficiente.\nTienes: {fmt_gems(bal)} | Necesitas: {fmt_gems(cantidad)}"
+                ),
+                ephemeral=True
+            )
+            return
+
+        # Añade al receptor
+        await db.add_balance(receiver_id, cantidad)
+
+        embed = discord.Embed(title="🎁 Tip Enviado", color=COLOR_SUCCESS)
+        embed.add_field(name="De",       value=interaction.user.mention, inline=True)
+        embed.add_field(name="Para",     value=usuario.mention,          inline=True)
+        embed.add_field(name="Cantidad", value=fmt_gems(cantidad),        inline=True)
+        sender_bal = await db.get_balance(sender_id)
+        embed.set_footer(text=f"Tu saldo: {fmt_gems(sender_bal)}")
+
+        await interaction.response.send_message(embed=embed)
+
+        # DM al receptor
+        try:
+            notif = discord.Embed(
+                title="🎁 ¡Recibiste un tip!",
+                description=f"{interaction.user.mention} te envió {fmt_gems(cantidad)} 💎",
+                color=COLOR_SUCCESS
+            )
+            await usuario.send(embed=notif)
+        except Exception:
+            pass
+
+    # ── /rakeback ─────────────────────────────────────────────
+    @app_commands.command(name="rakeback", description="Ver y reclamar tu rakeback acumulado")
+    async def rakeback(self, interaction: discord.Interaction):
+        """Muestra el rakeback pendiente con un botón para reclamarlo."""
+        if not await check_linked(interaction):
+            return
+
+        db           = self.bot.db
+        user_id      = str(interaction.user.id)
+        amount       = await db.get_rakeback(user_id)
+        rakeback_pct = float(await db.get_config("rakeback_pct") or "20")
+
+        embed = discord.Embed(title="💸 Tu Rakeback", color=COLOR_INFO)
+        embed.add_field(name="Acumulado",  value=fmt_gems(amount),   inline=True)
+        embed.add_field(name="Porcentaje", value=f"{rakeback_pct}%", inline=True)
+        embed.add_field(
+            name="Cómo funciona",
+            value=(
+                f"Cada vez que pierdes en cualquier juego,\n"
+                f"el **{rakeback_pct}%** de tu pérdida se acumula aquí.\n"
+                "Pulsa **Reclamar** para añadirlo a tu balance."
+            ),
+            inline=False
+        )
+
+        # Vista con botón Reclamar interactivo
+        view = RakebackView(user_id, amount, rakeback_pct, db)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+# ── Función de carga del módulo ───────────────────────────────
+async def setup(bot):
+    """Discord.py llama a esta función al cargar el módulo con load_extension."""
+    await bot.add_cog(Economy(bot))
