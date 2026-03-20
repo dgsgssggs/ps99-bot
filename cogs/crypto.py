@@ -12,7 +12,6 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-import httpx
 import os
 import secrets
 import asyncio
@@ -22,6 +21,32 @@ from utils import (
     error_embed, success_embed,
     COLOR_GOLD, COLOR_INFO, COLOR_ERROR
 )
+
+# httpx — instalado via requirements.txt
+try:
+    import httpx
+    HTTPX_OK = True
+except ImportError:
+    HTTPX_OK = False
+    print("[Crypto] ❌ httpx no instalado — pip install httpx")
+
+# solders — para wallets y txs de Solana
+try:
+    from solders.keypair import Keypair as _SoldersKeypair
+    SOLDERS_OK = True
+    print("[Crypto] ✅ solders cargado")
+except ImportError as e:
+    SOLDERS_OK = False
+    print(f"[Crypto] ❌ solders no disponible: {e}")
+
+# coincurve — para firmar txs de Litecoin (ECDSA secp256k1)
+try:
+    import coincurve as _coincurve
+    COINCURVE_OK = True
+    print("[Crypto] ✅ coincurve cargado")
+except ImportError as e:
+    COINCURVE_OK = False
+    print(f"[Crypto] ❌ coincurve no disponible: {e}")
 
 # ── Variables de entorno ──────────────────────────────────────
 HELIUS_API_KEY    = os.getenv("HELIUS_API_KEY", "")
@@ -40,17 +65,18 @@ LTC_FEE_RESERVE = 0.0002       # 0.0002 LTC — fee conservador de Litecoin
 # ══════════════════════════════════════════════════════════════
 
 def generate_sol_wallet() -> tuple:
-    """
-    Genera wallet SOL con seed criptográficamente segura.
-    Retorna (address_str, privkey_hex).
-    privkey_hex son 64 bytes (32 secret + 32 pubkey) en hex.
-    """
-    from solders.keypair import Keypair
-    seed    = secrets.token_bytes(32)
-    keypair = Keypair.from_seed(seed)
-    address = str(keypair.pubkey())
-    privkey = bytes(keypair).hex()      # 128 char hex = 64 bytes
-    return address, privkey
+    """Genera wallet SOL. Retorna (address, privkey_hex) o (None, None) si falla."""
+    if not SOLDERS_OK:
+        print("[Crypto] ❌ No se puede generar wallet SOL — solders no disponible")
+        return None, None
+    try:
+        from solders.keypair import Keypair
+        seed    = secrets.token_bytes(32)
+        keypair = Keypair.from_seed(seed)
+        return str(keypair.pubkey()), bytes(keypair).hex()
+    except Exception as e:
+        print(f"[Crypto] ❌ Error generando wallet SOL: {e}")
+        return None, None
 
 async def generate_ltc_wallet() -> tuple:
     """
@@ -172,11 +198,13 @@ async def sweep_sol(privkey_hex: str, from_address: str, to_address: str, amount
     """
     if not to_address or not HELIUS_API_KEY:
         return None
+    if not SOLDERS_OK:
+        print("[Sweep SOL] ❌ solders no disponible — sweep cancelado")
+        return None
 
-    # Lamports netos a enviar (restamos fee reserve)
     lamports = int((amount_sol - SOL_FEE_RESERVE) * 1_000_000_000)
     if lamports <= 0:
-        print(f"[Sweep SOL] Cantidad insuficiente para cubrir fees: {amount_sol} SOL")
+        print(f"[Sweep SOL] Cantidad insuficiente: {amount_sol} SOL")
         return None
 
     try:
@@ -255,6 +283,9 @@ async def sweep_ltc(privkey_hex: str, from_address: str, to_address: str, amount
       amount_ltc   → cantidad detectada
     """
     if not to_address:
+        return None
+    if not COINCURVE_OK:
+        print("[Sweep LTC] ❌ coincurve no disponible — sweep cancelado")
         return None
 
     satoshis = int((amount_ltc - LTC_FEE_RESERVE) * 100_000_000)
@@ -478,9 +509,16 @@ class Crypto(commands.Cog):
         """Escanea wallets y hace sweep cada 30 segundos."""
         try:
             await self._process_coin("SOL")
+        except Exception as e:
+            print(f"[SOL Scanner] ❌ Error inesperado: {e}")
+            import traceback
+            traceback.print_exc()
+        try:
             await self._process_coin("LTC")
         except Exception as e:
-            print(f"[Crypto Scanner] Error general: {e}")
+            print(f"[LTC Scanner] ❌ Error inesperado: {e}")
+            import traceback
+            traceback.print_exc()
 
     @scan_task.before_loop
     async def before_scan(self):
