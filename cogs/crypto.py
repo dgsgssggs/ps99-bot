@@ -374,33 +374,26 @@ class Crypto(commands.Cog):
         # Precio actual y ratio
         price_usd    = await get_price_usd(coin)
         gems_per_usd = int(await db.get_config("gems_per_usd") or GEMS_PER_USD)
-        hot          = HOT_WALLET_SOL if coin == "SOL" else HOT_WALLET_LTC
-        sweep_ok     = "✅ Auto-sweep activo" if hot else f"⚠️ Sin hot wallet — usa `/sethotwallet`"
-
         color      = 0x9945FF if coin == "SOL" else 0x345D9D
         coin_emoji = "◎" if coin == "SOL" else "Ł"
 
         embed = discord.Embed(title=f"{coin_emoji} Depósito en {coin}", color=color)
-        embed.add_field(name="Tu dirección", value=f"```{address}```", inline=False)
+        embed.add_field(name="Tu dirección de depósito", value=f"```{address}```", inline=False)
         if price_usd > 0:
             embed.add_field(
                 name="Tasa actual",
                 value=f"1 {coin} ≈ ${price_usd:.2f} → {fmt_gems(int(price_usd * gems_per_usd))}",
-                inline=True
+                inline=False
             )
-        embed.add_field(name="Sweep",  value=sweep_ok, inline=True)
         embed.add_field(
-            name="Proceso",
+            name="Cómo depositar",
             value=(
-                f"1. Envías {coin} a tu dirección\n"
-                f"2. Bot detecta en ~30 seg\n"
-                f"3. Recibes gemas por DM\n"
-                f"4. {coin} llega a tu hot wallet"
+                f"1. Envía {coin} a tu dirección\n"
+                f"2. El bot lo detecta automáticamente\n"
+                f"3. Recibes las gemas por DM"
             ),
             inline=False
         )
-        conf = "Instantáneo" if coin == "SOL" else "2 confirmaciones (~5 min)"
-        embed.set_footer(text=f"Confirmaciones: {conf} • Sin KYC • Fee mínima")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /sethotwallet ─────────────────────────────────────────

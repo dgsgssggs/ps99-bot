@@ -296,12 +296,7 @@ class JoinView(discord.ui.View):
                 perdedor_nombre = ch.creator.mention
                 ganador_profit  = ch.bet
 
-            # Rakeback al creador si perdió
-            if not creator_wins:
-                rakeback_pct = float(await self.cog.bot.db.get_config("rakeback_pct") or "20")
-                rakeback_amt = int(ch.bet * rakeback_pct / 100)
-                if rakeback_amt > 0:
-                    await self.cog.bot.db.add_rakeback(str(ch.creator_id), rakeback_amt)
+            # Rakeback handled below after embed is built
 
             # Logs solo del creador (el bot no tiene cuenta)
             profit_creator = (payout - ch.bet) if creator_wins else -ch.bet
@@ -326,11 +321,7 @@ class JoinView(discord.ui.View):
             await self.cog.bot.db.add_balance(str(ganador.id), payout)
             await self.cog.bot.db.add_wager(str(ch.creator_id), ch.bet)
 
-            # Rakeback al perdedor
-            rakeback_pct = float(await self.cog.bot.db.get_config("rakeback_pct") or "20")
-            rakeback_amt = int(ch.bet * rakeback_pct / 100)
-            if rakeback_amt > 0:
-                await self.cog.bot.db.add_rakeback(str(perdedor.id), rakeback_amt)
+            # Rakeback handled below after embed is built
 
             # Logs para ambos jugadores
             profit_ganador  = payout - ch.bet
@@ -378,10 +369,21 @@ class JoinView(discord.ui.View):
         )
 
         # Texto de rakeback si aplica
-        if not creator_wins or vs_bot:
+        # Only show rakeback footer if a human lost
+        human_loser_id = None
+        if vs_bot and not creator_wins:
+            human_loser_id = str(ch.creator_id)
+        elif not vs_bot:
+            human_loser_id = str(perdedor.id) if perdedor else None
+
+        if human_loser_id:
+            edge_cf      = await self.cog.bot.db.get_house_edge("coinflip")
+            house_profit = int(ch.bet * edge_cf / 100)
             rakeback_pct = float(await self.cog.bot.db.get_config("rakeback_pct") or "20")
-            rakeback_amt = int(ch.bet * rakeback_pct / 100)
-            embed.set_footer(text=f"Rakeback +{fmt_gems(rakeback_amt)} para {perdedor_nombre}")
+            rakeback_amt = int(house_profit * rakeback_pct / 100)
+            if rakeback_amt > 0:
+                await self.cog.bot.db.add_rakeback(human_loser_id, rakeback_amt)
+                embed.set_footer(text=f"Rakeback +{fmt_gems(rakeback_amt)} acreditado al perdedor")
 
         await interaction.response.edit_message(embed=embed, view=self)
 

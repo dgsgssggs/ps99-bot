@@ -294,8 +294,17 @@ class Mines(commands.Cog):
     @app_commands.command(name="mines", description="Destapa gemas sin pisar una mina")
     @app_commands.describe(
         apuesta="Cantidad de gemas a apostar",
-        minas="Número de minas (1-20, por defecto 5)"
+        minas="Cuántas minas quieres (más minas = más riesgo = más pago)"
     )
+    @app_commands.choices(minas=[
+        app_commands.Choice(name="1 mina  — Muy fácil",  value=1),
+        app_commands.Choice(name="3 minas — Fácil",      value=3),
+        app_commands.Choice(name="5 minas — Normal",     value=5),
+        app_commands.Choice(name="8 minas — Difícil",    value=8),
+        app_commands.Choice(name="12 minas — Muy difícil", value=12),
+        app_commands.Choice(name="15 minas — Extremo",   value=15),
+        app_commands.Choice(name="20 minas — Kamikaze",  value=20),
+    ])
     async def mines(self, interaction: discord.Interaction, apuesta: int, minas: int = 5):
         if not await check_linked(interaction):
             return

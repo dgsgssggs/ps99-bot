@@ -134,9 +134,10 @@ class Dice(commands.Cog):
             result_str = f"❌ Perdiste {fmt_gems(apuesta)}"
             color      = COLOR_ERROR
             db_result  = "lose"
-            # Acumula rakeback al perder
+            # Rakeback: % del beneficio de la casa (edge%), no del total apostado
+            house_profit = int(apuesta * edge / 100)
             rakeback_pct = float(await self.bot.db.get_config("rakeback_pct") or "20")
-            rakeback_amt = int(apuesta * rakeback_pct / 100)
+            rakeback_amt = int(house_profit * rakeback_pct / 100)
             if rakeback_amt > 0:
                 await self.bot.db.add_rakeback(user_id, rakeback_amt)
 

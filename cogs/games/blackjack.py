@@ -215,9 +215,11 @@ class BlackjackGame:
             profit    = -self.bet
             res_text  = f"❌ Perdiste {fmt_gems(self.bet)}"
             db_result = "lose"
-            # Acumula rakeback al perder
+            # Rakeback: % del beneficio de la casa (edge%), no del total apostado
+            edge_pct_bj  = await db.get_house_edge("blackjack")
+            house_profit = int(self.bet * edge_pct_bj / 100)
             rakeback_pct = float(await db.get_config("rakeback_pct") or "20")
-            rakeback_amt = int(self.bet * rakeback_pct / 100)
+            rakeback_amt = int(house_profit * rakeback_pct / 100)
             if rakeback_amt > 0:
                 await db.add_rakeback(user_id, rakeback_amt)
 

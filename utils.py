@@ -62,11 +62,25 @@ def get_admin_ids() -> set:
 
 # ── Formateadores ─────────────────────────────────────────────
 def fmt(number: int) -> str:
-    """1000000 → '1,000,000'"""
-    return f"{number:,}"
+    """Formats with K/M/B abbreviations. 1500→1.5K, 1000000→1M, 2500000000→2.5B"""
+    abs_n = abs(number)
+    sign  = "-" if number < 0 else ""
+    if abs_n >= 1_000_000_000:
+        val = abs_n / 1_000_000_000
+        s = f"{val:.1f}".rstrip('0').rstrip('.')
+        return f"{sign}{s}B"
+    elif abs_n >= 1_000_000:
+        val = abs_n / 1_000_000
+        s = f"{val:.1f}".rstrip('0').rstrip('.')
+        return f"{sign}{s}M"
+    elif abs_n >= 1_000:
+        val = abs_n / 1_000
+        s = f"{val:.1f}".rstrip('0').rstrip('.')
+        return f"{sign}{s}K"
+    return f"{sign}{abs_n:,}"
 
 def fmt_gems(amount: int) -> str:
-    """1000 → '💎 1,000'"""
+    """💎 1.5K, 💎 10M, 💎 2.5B"""
     return f"💎 {fmt(amount)}"
 
 # ── Embeds estándar ───────────────────────────────────────────
