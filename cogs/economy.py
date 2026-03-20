@@ -71,6 +71,24 @@ class RakebackView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
 
 
+class CloseTicketView(discord.ui.View):
+    """Botón para cerrar (eliminar) el canal de ticket tras procesar."""
+
+    def __init__(self):
+        super().__init__(timeout=300)   # 5 minutos para cerrar
+
+    @discord.ui.button(label="🔒 Cerrar Ticket", style=discord.ButtonStyle.danger)
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Elimina el canal del ticket."""
+        await interaction.response.send_message("Cerrando ticket en 3 segundos...")
+        import asyncio
+        await asyncio.sleep(3)
+        try:
+            await interaction.channel.delete(reason=f"Ticket cerrado por {interaction.user.name}")
+        except discord.Forbidden:
+            await interaction.followup.send("Sin permisos para eliminar el canal.", ephemeral=True)
+
+
 class ConfirmDepositView(discord.ui.View):
     """
     Vista con botones para confirmar o rechazar un depósito.
@@ -223,8 +241,6 @@ class ConfirmWithdrawView(discord.ui.View):
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Rechaza el retiro y devuelve el saldo al usuario."""
         db = interaction.client.db
-
-        # Devuelve el saldo que se descontó al crear el ticket
         await db.add_balance(self.user_id, self.amount)
 
         for child in self.children:
@@ -237,6 +253,11 @@ class ConfirmWithdrawView(discord.ui.View):
                 color=COLOR_ERROR
             )
         )
+        if interaction.channel.name.startswith("withdraw-"):
+            await interaction.followup.send(
+                embed=discord.Embed(description="¿Cerrar el ticket?", color=COLOR_ERROR),
+                view=CloseTicketView()
+            )
 
 
 # ── COG PRINCIPAL DE ECONOMÍA ─────────────────────────────────
@@ -319,21 +340,45 @@ class Economy(commands.Cog):
         # Crea la transacción pendiente en la base de datos
         tx_id = await db.create_transaction(user_id, "deposit", cantidad)
 
-        # Busca el canal de depósitos configurado
-        dep_channel_id = await db.get_config("deposit_channel")
-        agent_role_id  = await db.get_config("agent_role")
+        agent_role_id = await db.get_config("agent_role")
+        category_id   = await db.get_config("deposit_category")
+        dep_channel_id = await db.get_config("deposit_channel")   # Fallback
 
-        if not dep_channel_id:
+        guild       = interaction.guild
+        agent_role  = guild.get_role(int(agent_role_id)) if agent_role_id else None
+        ticket_channel = None
+
+        if category_id:
+            # ── Crea canal privado dentro de la categoría ─────
+            category = guild.get_channel(int(category_id))
+            if category and isinstance(category, discord.CategoryChannel):
+                # Permisos: solo el usuario y los agentes pueden ver el canal
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    interaction.user:   discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                    guild.me:           discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                }
+                if agent_role:
+                    overwrites[agent_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+                ticket_channel = await guild.create_text_channel(
+                    name=f"deposit-{interaction.user.name}-{tx_id}",
+                    category=category,
+                    overwrites=overwrites,
+                    reason=f"Ticket depósito #{tx_id}"
+                )
+
+        elif dep_channel_id:
+            # Fallback: canal fijo configurado con /setchannel
+            ticket_channel = guild.get_channel(int(dep_channel_id))
+
+        if not ticket_channel:
             await interaction.response.send_message(
-                embed=error_embed("No hay canal de depósitos configurado. Contacta al staff."),
+                embed=error_embed(
+                    "No hay categoría ni canal de depósitos configurado.\n"
+                    "Usa `/setcategory tipo:deposit` o `/setchannel tipo:deposit`."
+                ),
                 ephemeral=True
-            )
-            return
-
-        dep_channel = interaction.guild.get_channel(int(dep_channel_id))
-        if not dep_channel:
-            await interaction.response.send_message(
-                embed=error_embed("Canal de depósitos no encontrado."), ephemeral=True
             )
             return
 
@@ -342,25 +387,25 @@ class Economy(commands.Cog):
             title=f"📥 Ticket de Depósito #{tx_id}",
             color=COLOR_INFO
         )
-        embed.add_field(name="Usuario Discord", value=interaction.user.mention,    inline=True)
-        embed.add_field(name="Usuario Roblox",  value=user["roblox_name"],         inline=True)
-        embed.add_field(name="Cantidad",        value=fmt_gems(cantidad),           inline=True)
-        embed.add_field(name="Estado",          value="⏳ Pendiente",              inline=False)
+        embed.add_field(name="Usuario Discord", value=interaction.user.mention, inline=True)
+        embed.add_field(name="Usuario Roblox",  value=user["roblox_name"],      inline=True)
+        embed.add_field(name="Cantidad",        value=fmt_gems(cantidad),        inline=True)
+        embed.add_field(name="Estado",          value="⏳ Pendiente",            inline=False)
         embed.set_footer(text=f"TX ID: #{tx_id}")
 
-        # Menciona al rol de agentes si está configurado
-        ping = f"<@&{agent_role_id}>" if agent_role_id else "@staff"
+        ping = agent_role.mention if agent_role else "@staff"
 
-        # Envía el ticket con los botones de confirmación
         view = ConfirmDepositView(tx_id, user_id, cantidad)
-        await dep_channel.send(content=ping, embed=embed, view=view)
+        await ticket_channel.send(content=ping, embed=embed, view=view)
 
-        # Confirma al usuario
+        # Link al canal del ticket
+        ticket_link = f"https://discord.com/channels/{guild.id}/{ticket_channel.id}"
+
         await interaction.response.send_message(
             embed=success_embed(
                 "Solicitud Enviada",
                 f"Tu solicitud de depósito de {fmt_gems(cantidad)} ha sido enviada.\n"
-                f"Un agente la procesará pronto. TX ID: **#{tx_id}**"
+                f"[Ver ticket]({ticket_link}) — TX ID: **#{tx_id}**"
             ),
             ephemeral=True
         )
@@ -397,39 +442,67 @@ class Economy(commands.Cog):
         user  = await db.get_user(user_id)
         tx_id = await db.create_transaction(user_id, "withdraw", cantidad)
 
-        # Busca el canal de retiros
-        ret_channel_id = await db.get_config("withdraw_channel")
         agent_role_id  = await db.get_config("agent_role")
+        category_id    = await db.get_config("withdraw_category")
+        ret_channel_id = await db.get_config("withdraw_channel")   # Fallback
 
-        if not ret_channel_id:
-            # Si no hay canal, devuelve el saldo
+        guild       = interaction.guild
+        agent_role  = guild.get_role(int(agent_role_id)) if agent_role_id else None
+        ticket_channel = None
+
+        if category_id:
+            # ── Crea canal privado dentro de la categoría ─────
+            category = guild.get_channel(int(category_id))
+            if category and isinstance(category, discord.CategoryChannel):
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                    interaction.user:   discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                    guild.me:           discord.PermissionOverwrite(read_messages=True, send_messages=True),
+                }
+                if agent_role:
+                    overwrites[agent_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+                ticket_channel = await guild.create_text_channel(
+                    name=f"withdraw-{interaction.user.name}-{tx_id}",
+                    category=category,
+                    overwrites=overwrites,
+                    reason=f"Ticket retiro #{tx_id}"
+                )
+
+        elif ret_channel_id:
+            ticket_channel = guild.get_channel(int(ret_channel_id))
+
+        if not ticket_channel:
+            # Devuelve el saldo si no hay donde crear el ticket
             await db.add_balance(user_id, cantidad)
             await interaction.response.send_message(
-                embed=error_embed("No hay canal de retiros configurado."), ephemeral=True
+                embed=error_embed(
+                    "No hay categoría ni canal de retiros configurado.\n"
+                    "Usa `/setcategory tipo:withdraw` o `/setchannel tipo:withdraw`."
+                ),
+                ephemeral=True
             )
             return
 
-        ret_channel = interaction.guild.get_channel(int(ret_channel_id))
-
-        # Crea el embed del ticket de retiro
         embed = discord.Embed(
             title=f"📤 Ticket de Retiro #{tx_id}",
-            color=COLOR_ORANGE if True else None    # Color naranja para retiros
+            color=0xE67E22
         )
-        embed.color = 0xE67E22                      # Naranja
         embed.add_field(name="Usuario Discord", value=interaction.user.mention, inline=True)
         embed.add_field(name="Usuario Roblox",  value=user["roblox_name"],      inline=True)
         embed.add_field(name="Cantidad",        value=fmt_gems(cantidad),        inline=True)
 
-        ping = f"<@&{agent_role_id}>" if agent_role_id else "@staff"
+        ping = agent_role.mention if agent_role else "@staff"
         view = ConfirmWithdrawView(tx_id, user_id, cantidad)
-        await ret_channel.send(content=ping, embed=embed, view=view)
+        await ticket_channel.send(content=ping, embed=embed, view=view)
+
+        ticket_link = f"https://discord.com/channels/{guild.id}/{ticket_channel.id}"
 
         await interaction.response.send_message(
             embed=success_embed(
                 "Solicitud de Retiro Enviada",
                 f"Tu solicitud de retiro de {fmt_gems(cantidad)} ha sido enviada.\n"
-                f"TX ID: **#{tx_id}**"
+                f"[Ver ticket]({ticket_link}) — TX ID: **#{tx_id}**"
             ),
             ephemeral=True
         )

@@ -219,6 +219,44 @@ class Admin(commands.Cog):
             )
         )
 
+    # ── /setcategory ──────────────────────────────────────────
+    @app_commands.command(
+        name="setcategory",
+        description="[OWNER] Categoría donde se crearán los tickets de depósito/retiro"
+    )
+    @app_commands.describe(
+        tipo="Tipo: deposit o withdraw",
+        categoria="La categoría de Discord donde se crearán los canales"
+    )
+    async def setcategory(self, interaction: discord.Interaction, tipo: str, categoria: discord.CategoryChannel):
+        """
+        Configura la categoría donde el bot creará canales privados de ticket.
+        Cada depósito/retiro abre su propio canal privado dentro de esta categoría.
+        """
+        if not self.owner_check(interaction):
+            await interaction.response.send_message(
+                embed=error_embed("Solo el owner puede usar este comando."), ephemeral=True
+            )
+            return
+
+        tipo = tipo.lower()
+        if tipo not in ("deposit", "withdraw"):
+            await interaction.response.send_message(
+                embed=error_embed("Tipo inválido. Usa 'deposit' o 'withdraw'."), ephemeral=True
+            )
+            return
+
+        # Guarda el ID de la categoría en la config
+        await self.bot.db.set_config(f"{tipo}_category", str(categoria.id))
+
+        await interaction.response.send_message(
+            embed=success_embed(
+                "Categoría Configurada",
+                f"Los tickets de **{tipo}** se crearán en la categoría **{categoria.name}**.\n"
+                f"Cada ticket será un canal privado solo visible para el usuario y los agentes."
+            )
+        )
+
     # ── /setagentrole ─────────────────────────────────────────
     @app_commands.command(
         name="setagentrole",
@@ -346,10 +384,6 @@ class Admin(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-# ── Función de carga del módulo ───────────────────────────────
-async def setup(bot):
-    await bot.add_cog(Admin(bot))
-
     # ── /setrakeback ──────────────────────────────────────────
     @app_commands.command(
         name="setrakeback",
@@ -379,3 +413,8 @@ async def setup(bot):
                 f"Se acumula automáticamente y se reclama con `/rakeback`."
             )
         )
+
+
+# ── Función de carga del módulo ───────────────────────────────
+async def setup(bot):
+    await bot.add_cog(Admin(bot))
