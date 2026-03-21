@@ -15,7 +15,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 from datetime import datetime, timezone
-from utils import check_linked, fmt_gems, error_embed, success_embed, COLOR_GOLD, COLOR_INFO, COLOR_ERROR
+from utils import parse_amount, check_linked, fmt_gems, error_embed, success_embed, COLOR_GOLD, COLOR_INFO, COLOR_ERROR
 
 MIN_AMOUNT  = 250_000_000               # Mínimo 250M de gemas
 MAX_MINUTES = 15                        # Máximo 15 minutos
@@ -205,12 +205,19 @@ class Rain(commands.Cog):
         monto="Gemas a repartir (mínimo 250,000,000)",
         duracion="Minutos que dura la rain (1-15)"
     )
-    async def rain(self, interaction: discord.Interaction, monto: int, duracion: int):
+    async def rain(self, interaction: discord.Interaction, monto: str, duracion: int):
         """
         Inicia una lluvia de gemas. El monto se descuenta del balance del creador.
         Luego se elige el rol de wager requerido para participar.
         """
         if not await check_linked(interaction):
+            return
+
+        monto = parse_amount(str(monto))
+        if not monto:
+            await interaction.response.send_message(
+                embed=error_embed("Formato inválido. Usa números o K/M/B (ej: 500m, 1b)"), ephemeral=True
+            )
             return
 
         # Valida el monto mínimo

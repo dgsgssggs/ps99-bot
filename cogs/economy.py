@@ -11,6 +11,7 @@ from discord.ext import commands                # Comandos de discord.py
 from discord import app_commands               # Slash commands
 import os                                       # Variables de entorno
 from utils import (
+    parse_amount,
     check_linked, check_balance,
     fmt_gems, fmt,
     error_embed, success_embed,
@@ -325,7 +326,7 @@ class Economy(commands.Cog):
     # ── /deposit ──────────────────────────────────────────────
     @app_commands.command(name="deposit", description="Solicita un depósito de gemas")
     @app_commands.describe(cantidad="Cantidad de gemas a depositar")
-    async def deposit(self, interaction: discord.Interaction, cantidad: int):
+    async def deposit(self, interaction: discord.Interaction, cantidad: str):
         """Crea un ticket de depósito para que un agente lo confirme."""
         if not await check_linked(interaction):
             return                              # Sale si no está vinculado
@@ -416,12 +417,13 @@ class Economy(commands.Cog):
     # ── /withdraw ─────────────────────────────────────────────
     @app_commands.command(name="withdraw", description="Solicita un retiro de gemas")
     @app_commands.describe(cantidad="Cantidad de gemas a retirar")
-    async def withdraw(self, interaction: discord.Interaction, cantidad: int):
+    async def withdraw(self, interaction: discord.Interaction, cantidad: str):
         """Crea un ticket de retiro. Descuenta el saldo inmediatamente (lo devuelve si se rechaza)."""
         if not await check_linked(interaction):
             return
 
-        if cantidad <= 0:
+        cantidad = parse_amount(str(cantidad))
+        if not cantidad or cantidad <= 0:
             await interaction.response.send_message(
                 embed=error_embed("La cantidad debe ser mayor a 0."), ephemeral=True
             )
@@ -528,7 +530,7 @@ class Economy(commands.Cog):
         usuario="El usuario que recibirá las gemas",
         cantidad="Cantidad de gemas a enviar"
     )
-    async def tip(self, interaction: discord.Interaction, usuario: discord.Member, cantidad: int):
+    async def tip(self, interaction: discord.Interaction, usuario: discord.Member, cantidad: str):
         """Transfiere gemas de tu balance al de otro usuario."""
         if not await check_linked(interaction):
             return

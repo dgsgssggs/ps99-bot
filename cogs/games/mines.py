@@ -16,6 +16,7 @@ import random
 import secrets
 _rng = random.SystemRandom()
 from utils import (
+    parse_amount,
     check_linked, check_balance, fmt_gems,
     error_embed, update_wager_roles,
     COLOR_GOLD, COLOR_ERROR, COLOR_INFO
@@ -296,11 +297,12 @@ class Mines(commands.Cog):
         apuesta="Cantidad de gemas a apostar",
         minas="Número de minas (1-24)"
     )
-    async def mines(self, interaction: discord.Interaction, apuesta: int, minas: int):
+    async def mines(self, interaction: discord.Interaction, apuesta: str, minas: int):
         if not await check_linked(interaction):
             return
 
-        if apuesta <= 0:
+        apuesta = parse_amount(str(apuesta))
+        if not apuesta or apuesta <= 0:
             await interaction.response.send_message(
                 embed=error_embed("La apuesta debe ser mayor a 0."), ephemeral=True
             )

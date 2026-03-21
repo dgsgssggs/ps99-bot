@@ -13,6 +13,7 @@ import random
 import secrets
 _rng = random.SystemRandom()
 from utils import (
+    parse_amount,
     apply_rakeback,
     check_linked, check_balance, fmt_gems,
     error_embed, update_wager_roles,
@@ -56,7 +57,7 @@ class Keno(commands.Cog):
         apuesta="Cantidad de gemas a apostar",
         numeros="Tus números del 1 al 40, separados por espacio. Ej: 3 7 15 22 31"
     )
-    async def keno(self, interaction: discord.Interaction, apuesta: int, numeros: str):
+    async def keno(self, interaction: discord.Interaction, apuesta: str, numeros: str):
         """
         Juego de Keno:
         - El jugador elige entre 1 y 10 números del 1 al 40.
@@ -66,7 +67,8 @@ class Keno(commands.Cog):
         if not await check_linked(interaction):
             return
 
-        if apuesta <= 0:
+        apuesta = parse_amount(str(apuesta))
+        if not apuesta or apuesta <= 0:
             await interaction.response.send_message(
                 embed=error_embed("La apuesta debe ser mayor a 0."), ephemeral=True
             )

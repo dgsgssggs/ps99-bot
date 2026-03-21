@@ -23,6 +23,7 @@ import secrets
 _rng = random.SystemRandom()
 import asyncio
 from utils import (
+    parse_amount,
     check_linked, check_balance, fmt_gems,
     error_embed, update_wager_roles,
     COLOR_GOLD, COLOR_ERROR, COLOR_INFO, COLOR_PURPLE
@@ -452,7 +453,7 @@ class Coinflip(commands.Cog):
 
     @app_commands.command(name="coinflip", description="Crea un reto de coinflip — elige tu lado")
     @app_commands.describe(apuesta="Cantidad de gemas a apostar")
-    async def coinflip(self, interaction: discord.Interaction, apuesta: int):
+    async def coinflip(self, interaction: discord.Interaction, apuesta: str):
         """
         Inicia un coinflip. Primero eliges tu lado con botones,
         luego esperas a que alguien se una o llamas al bot.
@@ -460,7 +461,8 @@ class Coinflip(commands.Cog):
         if not await check_linked(interaction):
             return
 
-        if apuesta <= 0:
+        apuesta = parse_amount(str(apuesta))
+        if not apuesta or apuesta <= 0:
             await interaction.response.send_message(
                 embed=error_embed("La apuesta debe ser mayor a 0."), ephemeral=True
             )

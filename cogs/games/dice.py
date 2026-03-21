@@ -13,6 +13,7 @@ import random
 import secrets
 _rng = random.SystemRandom()
 from utils import (
+    parse_amount,
     apply_rakeback,
     check_linked, check_balance, fmt_gems,
     error_embed, update_wager_roles,
@@ -34,7 +35,7 @@ class Dice(commands.Cog):
     async def dice(
         self,
         interaction: discord.Interaction,
-        apuesta: int,
+        apuesta: str,
         numero: int = None,
         alto_bajo: str = None
     ):
@@ -46,7 +47,8 @@ class Dice(commands.Cog):
         if not await check_linked(interaction):
             return
 
-        if apuesta <= 0:
+        apuesta = parse_amount(str(apuesta))
+        if not apuesta or apuesta <= 0:
             await interaction.response.send_message(
                 embed=error_embed("La apuesta debe ser mayor a 0."), ephemeral=True
             )

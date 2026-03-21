@@ -15,6 +15,7 @@ import secrets
 _rng = random.SystemRandom()  # Cryptographically secure RNG
 import asyncio                                  # Para el delay entre cartas
 from utils import (
+    parse_amount,
     apply_rakeback,
     check_linked, check_balance, fmt_gems,
     error_embed, update_wager_roles,
@@ -254,11 +255,12 @@ class Blackjack(commands.Cog):
 
     @app_commands.command(name="blackjack", description="Juega una partida de Blackjack")
     @app_commands.describe(apuesta="Cantidad de gemas a apostar")
-    async def blackjack(self, interaction: discord.Interaction, apuesta: int):
+    async def blackjack(self, interaction: discord.Interaction, apuesta: str):
         if not await check_linked(interaction):
             return
 
-        if apuesta <= 0:
+        apuesta = parse_amount(str(apuesta))
+        if not apuesta or apuesta <= 0:
             await interaction.response.send_message(
                 embed=error_embed("La apuesta debe ser mayor a 0."), ephemeral=True
             )

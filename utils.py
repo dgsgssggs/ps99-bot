@@ -83,6 +83,29 @@ def fmt_gems(amount: int) -> str:
     """💎 1.5K, 💎 10M, 💎 2.5B"""
     return f"💎 {fmt(amount)}"
 
+def parse_amount(value: str) -> int | None:
+    """
+    Parsea una cantidad con K/M/B como sufijo.
+    Ejemplos: "1k" → 1000, "1.5m" → 1500000, "2b" → 2000000000
+    También acepta números normales: "1000" → 1000
+    Retorna None si el formato es inválido.
+    """
+    if not value:
+        return None
+    value = value.strip().lower().replace(",", "").replace("_", "")
+    multipliers = {"k": 1_000, "m": 1_000_000, "b": 1_000_000_000}
+    for suffix, mult in multipliers.items():
+        if value.endswith(suffix):
+            try:
+                num = float(value[:-1])
+                return int(num * mult)
+            except ValueError:
+                return None
+    try:
+        return int(float(value))
+    except ValueError:
+        return None
+
 # ── Embeds estándar ───────────────────────────────────────────
 def error_embed(message: str) -> discord.Embed:
     """Embed rojo de error."""

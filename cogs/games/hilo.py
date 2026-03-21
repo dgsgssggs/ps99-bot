@@ -13,6 +13,7 @@ import random
 import secrets
 _rng = random.SystemRandom()
 from utils import (
+    parse_amount,
     apply_rakeback,
     check_linked, check_balance, fmt_gems,
     error_embed, update_wager_roles,
@@ -242,12 +243,13 @@ class HiLo(commands.Cog):
 
     @app_commands.command(name="hilo", description="Adivina si la siguiente carta será mayor o menor")
     @app_commands.describe(apuesta="Cantidad de gemas a apostar")
-    async def hilo(self, interaction: discord.Interaction, apuesta: int):
+    async def hilo(self, interaction: discord.Interaction, apuesta: str):
         """Inicia una partida de Hi-Lo."""
         if not await check_linked(interaction):
             return
 
-        if apuesta <= 0:
+        apuesta = parse_amount(str(apuesta))
+        if not apuesta or apuesta <= 0:
             await interaction.response.send_message(
                 embed=error_embed("La apuesta debe ser mayor a 0."), ephemeral=True
             )
