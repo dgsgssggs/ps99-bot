@@ -80,21 +80,4 @@ async def main():
 
 # ── Punto de entrada del script ───────────────────────────────
 if __name__ == "__main__":
-    # Arranca el health server INMEDIATAMENTE antes que todo
-    # Railway hace el health check muy rápido — debe responder desde el primer segundo
-    import threading
-    from http.server import HTTPServer, BaseHTTPRequestHandler
-
-    class _H(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"OK")
-        def log_message(self, *a): pass
-
-    port = int(os.getenv("PORT", 8080))
-    _srv = HTTPServer(("0.0.0.0", port), _H)
-    threading.Thread(target=_srv.serve_forever, daemon=True).start()
-    print(f"🌐 Health server en puerto {port} — listo antes del bot")
-
     asyncio.run(main())

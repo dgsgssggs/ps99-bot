@@ -1,7 +1,6 @@
 {
   "deploy": {
     "startCommand": "python main.py",
-    "healthcheckPath": "/",
     "restartPolicyType": "never"
   }
 }
