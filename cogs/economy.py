@@ -7,6 +7,7 @@
 # ============================================================
 
 import discord                                  # Librería de Discord
+import httpx                                    # Para verificar usuario de Roblox
 from discord.ext import commands                # Comandos de discord.py
 from discord import app_commands               # Slash commands
 import os                                       # Variables de entorno
@@ -273,30 +274,69 @@ class Economy(commands.Cog):
 
     # ── /link ─────────────────────────────────────────────────
     @app_commands.command(name="link", description="Vincula tu cuenta de Roblox al bot")
-    @app_commands.describe(usuario_roblox="Tu nombre de usuario en Roblox")
+    @app_commands.describe(usuario_roblox="Tu nombre de usuario exacto en Roblox")
     async def link(self, interaction: discord.Interaction, usuario_roblox: str):
-        """Vincula la cuenta de Discord del usuario con su nombre de Roblox."""
-        db = self.bot.db                        # Base de datos
-        user_id = str(interaction.user.id)      # ID de Discord como string
+        """
+        Verifica que el usuario de Roblox existe via la API oficial
+        y luego lo vincula a la cuenta de Discord.
+        """
+        await interaction.response.defer(ephemeral=True)
 
-        existing = await db.get_user(user_id)   # Busca si ya existe el usuario
+        db      = self.bot.db
+        user_id = str(interaction.user.id)
+
+        # ── Verifica el usuario en la API de Roblox ───────────
+        # Endpoint oficial: busca por username y retorna el ID y nombre exacto
+        roblox_user = None
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.post(
+                    "https://users.roblox.com/v1/usernames/users",
+                    json={"usernames": [usuario_roblox], "excludeBannedUsers": False}
+                )
+                if r.status_code == 200:
+                    data = r.json().get("data", [])
+                    if data:
+                        # API retorna el nombre exacto con mayúsculas correctas
+                        roblox_user = {
+                            "id":   data[0]["id"],
+                            "name": data[0]["name"]      # Nombre real con capitalización correcta
+                        }
+        except Exception:
+            pass
+
+        if not roblox_user:
+            await interaction.followup.send(
+                embed=error_embed(
+                    f"No se encontró el usuario **{usuario_roblox}** en Roblox.\n"
+                    "Asegúrate de escribir exactamente tu nombre de usuario."
+                ),
+                ephemeral=True
+            )
+            return
+
+        # Usa el nombre exacto que devuelve Roblox (capitalización correcta)
+        nombre_exacto = roblox_user["name"]
+        roblox_id     = roblox_user["id"]
+
+        existing = await db.get_user(user_id)
 
         if existing:
-            # Si ya existe, actualiza el nombre de Roblox
-            await db.update_roblox(user_id, usuario_roblox)
-            msg = f"Cuenta actualizada: **{usuario_roblox}**"
+            await db.update_roblox(user_id, nombre_exacto)
+            msg = f"Cuenta actualizada: **{nombre_exacto}**"
         else:
-            # Si no existe, crea el usuario nuevo
-            await db.create_user(user_id, usuario_roblox)
-            msg = f"Cuenta vinculada: **{usuario_roblox}** ✅"
+            await db.create_user(user_id, nombre_exacto)
+            msg = f"Cuenta vinculada: **{nombre_exacto}** ✅"
 
         embed = discord.Embed(
             title="🔗 Cuenta Vinculada",
             description=msg,
             color=COLOR_SUCCESS
         )
+        embed.add_field(name="Roblox ID", value=str(roblox_id), inline=True)
+        embed.add_field(name="Username",  value=nombre_exacto,  inline=True)
         embed.set_footer(text=f"Discord: {interaction.user.name}")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     # ── /balance ──────────────────────────────────────────────
     @app_commands.command(name="balance", description="Muestra tus gemas actuales")

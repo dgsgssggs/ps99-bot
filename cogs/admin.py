@@ -489,6 +489,169 @@ class Admin(commands.Cog):
         )
 
 
+    # ── /setup ───────────────────────────────────────────────
+    @app_commands.command(
+        name="setup",
+        description="[OWNER] Crea y configura automáticamente todos los canales y categorías del bot"
+    )
+    async def setup_bot(self, interaction: discord.Interaction):
+        """
+        Crea en el servidor:
+        - Categoría: 🎰 PS99 Bot
+          ├── #📥-depositos       (tickets de depósito)
+          ├── #📤-retiros         (tickets de retiro)
+          └── #📋-logs            (logs del sistema)
+        - Categoría: 🎮 Juegos
+          ├── #🪙-coinflips       (coinflips)
+          └── #🌧️-rains           (rains)
+        - Categoría: 🎫 Tickets
+          ├── (aquí se crearán los canales de tickets privados)
+        """
+        if not self.owner_check(interaction):
+            await interaction.response.send_message(
+                embed=error_embed("Solo el owner puede usar este comando."), ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        guild = interaction.guild
+        db    = self.bot.db
+        log   = []                              # Lista de acciones realizadas
+
+        try:
+            # ── Permisos base ─────────────────────────────────
+            # Solo el bot puede ver las categorías por defecto
+            # Los canales específicos tendrán sus propios permisos
+            everyone = guild.default_role
+            bot_member = guild.me
+
+            overwrites_private = {
+                everyone:   discord.PermissionOverwrite(read_messages=False),
+                bot_member: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+            overwrites_public = {
+                everyone:   discord.PermissionOverwrite(read_messages=True, send_messages=False),
+                bot_member: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
+
+            # ── CATEGORÍA: PS99 Bot ───────────────────────────
+            cat_main = await guild.create_category(
+                "🎰 PS99 Bot",
+                overwrites={
+                    everyone:   discord.PermissionOverwrite(read_messages=False),
+                    bot_member: discord.PermissionOverwrite(read_messages=True)
+                }
+            )
+            log.append(f"📁 Categoría creada: **{cat_main.name}**")
+
+            # Canal de logs (solo staff puede ver)
+            ch_logs = await guild.create_text_channel(
+                "📋-logs",
+                category=cat_main,
+                overwrites=overwrites_private,
+                topic="Logs automáticos del bot PS99"
+            )
+            await db.set_config("log_channel", str(ch_logs.id))
+            log.append(f"  ✅ #{ch_logs.name} → configurado como canal de logs")
+
+            # Canal de depósitos (solo staff)
+            ch_dep = await guild.create_text_channel(
+                "📥-depositos",
+                category=cat_main,
+                overwrites=overwrites_private,
+                topic="Tickets de depósito de gemas"
+            )
+            await db.set_config("deposit_channel", str(ch_dep.id))
+            log.append(f"  ✅ #{ch_dep.name} → configurado como canal de depósitos")
+
+            # Canal de retiros (solo staff)
+            ch_ret = await guild.create_text_channel(
+                "📤-retiros",
+                category=cat_main,
+                overwrites=overwrites_private,
+                topic="Tickets de retiro de gemas"
+            )
+            await db.set_config("withdraw_channel", str(ch_ret.id))
+            log.append(f"  ✅ #{ch_ret.name} → configurado como canal de retiros")
+
+            # ── CATEGORÍA: Juegos ─────────────────────────────
+            cat_games = await guild.create_category(
+                "🎮 Juegos",
+                overwrites={
+                    everyone:   discord.PermissionOverwrite(read_messages=True),
+                    bot_member: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                }
+            )
+            log.append(f"📁 Categoría creada: **{cat_games.name}**")
+
+            # Canal de coinflips (público, solo el bot puede enviar)
+            ch_cf = await guild.create_text_channel(
+                "🪙-coinflips",
+                category=cat_games,
+                overwrites=overwrites_public,
+                topic="Retos de coinflip PvP"
+            )
+            await db.set_config("coinflip_channel", str(ch_cf.id))
+            log.append(f"  ✅ #{ch_cf.name} → configurado como canal de coinflips")
+
+            # Canal de rains (público)
+            ch_rain = await guild.create_text_channel(
+                "🌧️-rains",
+                category=cat_games,
+                overwrites=overwrites_public,
+                topic="Lluvias de gemas"
+            )
+            await db.set_config("rain_channel", str(ch_rain.id))
+            log.append(f"  ✅ #{ch_rain.name} → configurado como canal de rains")
+
+            # ── CATEGORÍA: Tickets ────────────────────────────
+            cat_tickets = await guild.create_category(
+                "🎫 Tickets",
+                overwrites={
+                    everyone:   discord.PermissionOverwrite(read_messages=False),
+                    bot_member: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                }
+            )
+            await db.set_config("deposit_category",  str(cat_tickets.id))
+            await db.set_config("withdraw_category", str(cat_tickets.id))
+            log.append(f"📁 Categoría creada: **{cat_tickets.name}**")
+            log.append(f"  ✅ Los tickets de depósito/retiro se crearán aquí")
+
+            # ── Embed de resultado ────────────────────────────
+            embed = discord.Embed(
+                title="✅ Setup Completado",
+                description="\n".join(log),
+                color=0x2ECC71
+            )
+            embed.add_field(
+                name="Pasos restantes",
+                value=(
+                    "1. /setagentrole — rol de agentes\n"
+                    "2. /setagentlimit — límites a tus agentes\n"
+                    "3. /addwagerrole — roles de wager\n"
+                    "4. /sethouseedge — house edge de cada juego"
+                ),
+                inline=False
+            )
+            embed.set_footer(text="Todos los canales y categorías han sido creados y configurados.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+        except discord.Forbidden:
+            await interaction.followup.send(
+                embed=error_embed(
+                    "El bot no tiene permisos para crear canales.\n"
+                    "Asegurate de que tiene permisos de Administrador."
+                ),
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                embed=error_embed(f"Error durante el setup: {e}"),
+                ephemeral=True
+            )
+
+
 # ── Función de carga del módulo ───────────────────────────────
 async def setup(bot):
     await bot.add_cog(Admin(bot))
