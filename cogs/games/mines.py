@@ -121,7 +121,7 @@ class MinesView(discord.ui.View):
     """
 
     def __init__(self, game: MinesGame):
-        super().__init__(timeout=120)
+        super().__init__(timeout=600)
         self.game = game
         self._build_grid()
 

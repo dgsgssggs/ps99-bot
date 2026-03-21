@@ -66,7 +66,7 @@ class HiLoView(discord.ui.View):
     """Botones Hi / Lo / Cobrar con probabilidades dinámicas."""
 
     def __init__(self, game):
-        super().__init__(timeout=120)
+        super().__init__(timeout=600)
         self.game = game
         self._update_buttons()
 
@@ -126,11 +126,22 @@ class HiLoView(discord.ui.View):
         await self.game.cashout(interaction)
 
     async def on_timeout(self):
+        """10 min sin actividad — termina la partida y devuelve la apuesta."""
         self.game.cog.active_games.pop(self.game.player_id, None)
+        # Devuelve la apuesta si el jugador no cobró
+        if self.game.bet > 0:
+            await self.game.bot.db.add_balance(str(self.game.player_id), self.game.bet)
         for item in self.children:
             item.disabled = True
         try:
-            await self.game.message.edit(view=self)
+            msg = self.game.message
+            if msg:
+                embed = discord.Embed(
+                    title="⏰ Hi-Lo — Tiempo agotado",
+                    description="La partida expiró por inactividad. Se devuelve tu apuesta.",
+                    color=0x95a5a6
+                )
+                await msg.edit(embed=embed, view=self)
         except Exception:
             pass
 

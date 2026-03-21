@@ -185,7 +185,16 @@ class Codes(commands.Cog):
                 pub_embed.set_footer(text=f"Usos restantes: {max(0, uses_left)}")
 
                 ping = f"<@&{codes_role_id}>" if codes_role_id else ""
-                await channel.send(content=ping, embed=pub_embed)
+                try:
+                    await channel.send(content=ping if ping else None, embed=pub_embed)
+                except discord.Forbidden:
+                    pass   # Sin permisos para enviar en ese canal
+                except Exception as e:
+                    print(f"[Codes] Error sending to channel: {e}")
+            else:
+                print(f"[Codes] Canal {codes_channel_id} no encontrado en el servidor")
+        else:
+            print("[Codes] codes_channel no configurado — usa /setchannel tipo:codes")
 
     # ── /code delete ──────────────────────────────────────────
     @code_group.command(name="delete", description="[OWNER/ADMIN] Elimina un código")

@@ -258,11 +258,7 @@ class ConfirmWithdrawView(discord.ui.View):
                 color=COLOR_ERROR
             )
         )
-        if interaction.channel.name.startswith("withdraw-"):
-            await interaction.followup.send(
-                embed=discord.Embed(description="¿Cerrar el ticket?", color=COLOR_ERROR),
-                view=CloseTicketView()
-            )
+
 
 
 # ── COG PRINCIPAL DE ECONOMÍA ─────────────────────────────────
@@ -502,42 +498,20 @@ class Economy(commands.Cog):
         tx_id = await db.create_transaction(user_id, "withdraw", cantidad)
 
         agent_role_id  = await db.get_config("agent_role")
-        category_id    = await db.get_config("withdraw_category")
-        ret_channel_id = await db.get_config("withdraw_channel")   # Fallback
+        ret_channel_id = await db.get_config("withdraw_channel")
 
         guild       = interaction.guild
         agent_role  = guild.get_role(int(agent_role_id)) if agent_role_id else None
-        ticket_channel = None
 
-        if category_id:
-            # ── Crea canal privado dentro de la categoría ─────
-            category = guild.get_channel(int(category_id))
-            if category and isinstance(category, discord.CategoryChannel):
-                overwrites = {
-                    guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                    interaction.user:   discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                    guild.me:           discord.PermissionOverwrite(read_messages=True, send_messages=True),
-                }
-                if agent_role:
-                    overwrites[agent_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-
-                ticket_channel = await guild.create_text_channel(
-                    name=f"withdraw-{interaction.user.name}-{tx_id}",
-                    category=category,
-                    overwrites=overwrites,
-                    reason=f"Ticket retiro #{tx_id}"
-                )
-
-        elif ret_channel_id:
-            ticket_channel = guild.get_channel(int(ret_channel_id))
+        # Withdraw siempre va al canal fijo (no crea canales individuales)
+        ticket_channel = guild.get_channel(int(ret_channel_id)) if ret_channel_id else None
 
         if not ticket_channel:
-            # Devuelve el saldo si no hay donde crear el ticket
             await db.add_balance(user_id, cantidad)
             await interaction.response.send_message(
                 embed=error_embed(
-                    "No hay categoría ni canal de retiros configurado.\n"
-                    "Usa `/setcategory tipo:withdraw` o `/setchannel tipo:withdraw`."
+                    "No hay canal de retiros configurado.\n"
+                    "El owner debe usar `/setup` o `/setchannel tipo:withdraw`."
                 ),
                 ephemeral=True
             )

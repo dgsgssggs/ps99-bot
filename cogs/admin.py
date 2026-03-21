@@ -613,10 +613,9 @@ class Admin(commands.Cog):
                     bot_member: discord.PermissionOverwrite(read_messages=True, send_messages=True)
                 }
             )
-            await db.set_config("deposit_category",  str(cat_tickets.id))
-            await db.set_config("withdraw_category", str(cat_tickets.id))
+            await db.set_config("deposit_category", str(cat_tickets.id))
             log.append(f"📁 Categoría creada: **{cat_tickets.name}**")
-            log.append(f"  ✅ Los tickets de depósito/retiro se crearán aquí")
+            log.append(f"  ✅ Los tickets de depósito privados se crearán aquí")
 
             # ── Embed de resultado ────────────────────────────
             embed = discord.Embed(

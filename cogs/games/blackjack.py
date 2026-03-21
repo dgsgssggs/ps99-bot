@@ -100,7 +100,7 @@ def is_blackjack(hand):
 class BlackjackView(discord.ui.View):
 
     def __init__(self, game):
-        super().__init__(timeout=120)
+        super().__init__(timeout=600)
         self.game = game
 
     async def on_timeout(self):
