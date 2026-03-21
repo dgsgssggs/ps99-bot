@@ -44,8 +44,18 @@ class HiLoView(discord.ui.View):
     """Botones: Mayor (Hi), Menor (Lo) y Cobrar."""
 
     def __init__(self, game):
-        super().__init__(timeout=60)
+        super().__init__(timeout=120)
         self.game = game
+
+    async def on_timeout(self):
+        """Tiempo agotado: limpia la partida."""
+        self.game.cog.active_games.pop(self.game.player_id, None)
+        for item in self.children:
+            item.disabled = True
+        try:
+            await self.game.message.edit(view=self)
+        except Exception:
+            pass
 
     @discord.ui.button(label="🔼 Mayor (Hi)", style=discord.ButtonStyle.primary)
     async def hi(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -76,15 +86,16 @@ class HiLoView(discord.ui.View):
 class HiLoGame:
     """Representa una partida activa de Hi-Lo."""
 
-    def __init__(self, bot, player: discord.Member, bet: int, house_edge: float):
+    def __init__(self, bot, cog, player: discord.Member, bet: int, house_edge: float):
         self.bot         = bot
+        self.cog         = cog                  # Referencia al cog para limpiar active_games
         self.player      = player
         self.player_id   = player.id
-        self.bet         = bet                  # Apuesta inicial
-        self.house_edge  = house_edge           # House edge en %
-        self.current_val, self.current_suit = random_card()  # Primera carta
-        self.multiplier  = 1.0                  # Multiplicador actual
-        self.round       = 1                    # Número de ronda actual
+        self.bet         = bet
+        self.house_edge  = house_edge
+        self.current_val, self.current_suit = random_card()
+        self.multiplier  = 1.0
+        self.round       = 1
 
     def build_embed(self, prev_card: str = None, next_card: str = None, result: str = None):
         """Construye el embed del estado actual del juego."""
@@ -180,10 +191,12 @@ class HiLoGame:
 
     async def cashout(self, interaction: discord.Interaction):
         """El jugador cobra sus ganancias acumuladas."""
-        payout  = int(self.bet * self.multiplier)              # Total a cobrar
-        profit  = payout - self.bet                            # Ganancia neta
+        # Limpia active_games al cobrar
+        self.cog.active_games.pop(self.player_id, None)
 
-        # Añade el payout al balance del jugador
+        payout  = int(self.bet * self.multiplier)
+        profit  = payout - self.bet
+
         await self.bot.db.add_balance(str(self.player_id), payout)
 
         # Registra en logs
@@ -252,8 +265,8 @@ class HiLo(commands.Cog):
         # Obtiene el house edge
         edge = await self.bot.db.get_house_edge("hilo")
 
-        # Crea la partida
-        game = HiLoGame(self.bot, interaction.user, apuesta, edge)
+        # Crea la partida pasando self (cog) para limpiar active_games
+        game = HiLoGame(self.bot, self, interaction.user, apuesta, edge)
         self.active_games[interaction.user.id] = game
 
         embed = game.build_embed()
