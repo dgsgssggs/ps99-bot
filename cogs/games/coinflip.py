@@ -87,20 +87,28 @@ class ChooseSideView(discord.ui.View):
         challenge = CoinflipChallenge(self.creator, self.bet, side)
         self.cog.active_challenges[self.creator.id] = challenge
 
+        # Busca el canal de coinflip configurado por el owner
+        cf_channel_id = await self.cog.bot.db.get_config("coinflip_channel")
+        if cf_channel_id:
+            target = self.guild.get_channel(int(cf_channel_id)) or self.channel
+        else:
+            target = self.channel   # Fallback al canal donde se ejecutó
+
         # Construye el embed del reto
         embed = _build_challenge_embed(challenge, pending=True)
 
-        # Publica el reto en el canal con los botones de unirse / call bot
+        # Publica el reto en el canal correcto
         join_view = JoinView(self.cog, challenge)
-        msg       = await self.channel.send(embed=embed, view=join_view)
+        msg       = await target.send(embed=embed, view=join_view)
         challenge.message = msg
 
         # Link directo al mensaje del reto
-        link = f"https://discord.com/channels/{interaction.guild_id}/{self.channel.id}/{msg.id}"
+        link = f"https://discord.com/channels/{interaction.guild_id}/{target.id}/{msg.id}"
 
-        # Confirma al creador con el link (edita el ephemeral)
+        # Confirma al creador con el link
+        canal_txt = f"en {target.mention}" if target.id != self.channel.id else "aquí"
         await interaction.response.edit_message(
-            content=f"✅ Reto publicado — **{SIDE_LABEL[side]}**\n[Ver coinflip]({link})",
+            content=f"✅ Reto publicado {canal_txt} — **{SIDE_LABEL[side]}**\n[Ver coinflip]({link})",
             embed=None,
             view=self
         )
