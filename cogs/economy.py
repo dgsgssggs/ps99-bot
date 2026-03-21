@@ -538,6 +538,13 @@ class Economy(commands.Cog):
         if not await check_linked(interaction):
             return
 
+        cantidad = parse_amount(str(cantidad))
+        if not cantidad or cantidad <= 0:
+            await interaction.response.send_message(
+                embed=error_embed("Cantidad inválida. Usa K/M/B (ej: 500k, 1m)"), ephemeral=True
+            )
+            return
+
         if usuario.id == interaction.user.id:
             await interaction.response.send_message(
                 embed=error_embed("No puedes enviarte gemas a ti mismo."), ephemeral=True

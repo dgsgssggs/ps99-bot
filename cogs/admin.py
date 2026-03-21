@@ -9,7 +9,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import (
-    is_owner, fmt_gems, fmt,
+    is_owner, fmt_gems, fmt, parse_amount,
     error_embed, success_embed,
     COLOR_INFO, COLOR_SUCCESS, COLOR_ERROR
 )
@@ -83,7 +83,7 @@ class Admin(commands.Cog):
         agente="El miembro a quien asignar como agente",
         cantidad="Límite máximo que puede procesar en depósitos"
     )
-    async def setagentlimit(self, interaction: discord.Interaction, agente: discord.Member, cantidad: int):
+    async def setagentlimit(self, interaction: discord.Interaction, agente: discord.Member, cantidad: str):
         """Define cuántas gemas puede procesar un agente antes de necesitar recarga."""
         if not self.owner_check(interaction):
             await interaction.response.send_message(
@@ -91,9 +91,10 @@ class Admin(commands.Cog):
             )
             return
 
-        if cantidad <= 0:
+        cantidad = parse_amount(str(cantidad))
+        if not cantidad or cantidad <= 0:
             await interaction.response.send_message(
-                embed=error_embed("La cantidad debe ser mayor a 0."), ephemeral=True
+                embed=error_embed("La cantidad debe ser mayor a 0. Usa K/M/B"), ephemeral=True
             )
             return
 
@@ -296,7 +297,7 @@ class Admin(commands.Cog):
         cantidad="Gemas apostadas requeridas para obtener el rol",
         rol="El rol a asignar cuando se alcanza la cantidad"
     )
-    async def addwagerrole(self, interaction: discord.Interaction, cantidad: int, rol: discord.Role):
+    async def addwagerrole(self, interaction: discord.Interaction, cantidad: str, rol: discord.Role):
         """Configura un rol que se asigna automáticamente al alcanzar cierto wager."""
         if not self.owner_check(interaction):
             await interaction.response.send_message(
@@ -304,6 +305,12 @@ class Admin(commands.Cog):
             )
             return
 
+        cantidad = parse_amount(str(cantidad))
+        if not cantidad or cantidad <= 0:
+            await interaction.response.send_message(
+                embed=error_embed("Cantidad inválida. Usa K/M/B"), ephemeral=True
+            )
+            return
         await self.bot.db.add_wager_role(cantidad, str(rol.id))
 
         await interaction.response.send_message(
@@ -342,7 +349,7 @@ class Admin(commands.Cog):
         usuario="El usuario a modificar",
         cantidad="Nuevo balance (reemplaza el actual)"
     )
-    async def setbalance(self, interaction: discord.Interaction, usuario: discord.Member, cantidad: int):
+    async def setbalance(self, interaction: discord.Interaction, usuario: discord.Member, cantidad: str):
         """Fuerza el balance de un usuario a una cantidad específica (para correcciones)."""
         if not self.owner_check(interaction):
             await interaction.response.send_message(
@@ -350,8 +357,13 @@ class Admin(commands.Cog):
             )
             return
 
+        cantidad = parse_amount(str(cantidad))
+        if not cantidad or cantidad < 0:
+            await interaction.response.send_message(
+                embed=error_embed("Cantidad inválida."), ephemeral=True
+            )
+            return
         db = self.bot.db
-        # Obtiene el balance actual y calcula la diferencia
         current = await db.get_balance(str(usuario.id))
         diff    = cantidad - current                   # Diferencia a añadir o quitar
 
