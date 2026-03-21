@@ -182,9 +182,17 @@ class Admin(commands.Cog):
         description="[OWNER] Configura un canal del bot"
     )
     @app_commands.describe(
-        tipo="Tipo de canal (deposit, withdraw, log, coinflip)",
+        tipo="Tipo de canal",
         canal="El canal a configurar"
     )
+    @app_commands.choices(tipo=[
+        app_commands.Choice(name="deposit  — Tickets de depósito",   value="deposit"),
+        app_commands.Choice(name="withdraw — Tickets de retiro",      value="withdraw"),
+        app_commands.Choice(name="log      — Logs del sistema",       value="log"),
+        app_commands.Choice(name="coinflip — Canal de coinflips",     value="coinflip"),
+        app_commands.Choice(name="rain     — Canal de rains",         value="rain"),
+        app_commands.Choice(name="codes    — Canal de códigos",       value="codes"),
+    ])
     async def setchannel(self, interaction: discord.Interaction, tipo: str, canal: discord.TextChannel):
         """Configura los canales usados por el bot."""
         if not self.owner_check(interaction):

@@ -247,15 +247,12 @@ class JoinView(discord.ui.View):
         # Devuelve el saldo al creador
         await self.cog.bot.db.add_balance(str(ch.creator_id), ch.bet)
 
-        for item in self.children:
-            item.disabled = True
-
-        embed = discord.Embed(
-            title="🪙 Coinflip — Cancelado",
-            description=f"Reto cancelado por {ch.creator.mention}.\nSe devuelven {fmt_gems(ch.bet)}.",
-            color=COLOR_ERROR
-        )
-        await interaction.response.edit_message(embed=embed, view=self)
+        # Borra el mensaje silenciosamente — sin embed de cancelado
+        try:
+            await interaction.message.delete()
+        except Exception:
+            pass
+        await interaction.response.defer()
 
     # ── Lógica de resolución (compartida) ─────────────────────
     async def _resolve(
@@ -279,6 +276,29 @@ class JoinView(discord.ui.View):
         for item in self.children:
             item.disabled = True
 
+        # ── Animación de la moneda girando ────────────────────
+        FRAMES = [
+            ("🌀", "Lanzando la moneda..."),
+            ("🪙", "· · · · · · · · ·"),
+            ("✨", "· · · · · · · · ·"),
+            ("🪙", "· · · · · · · ·"),
+            ("✨", "· · · · · · ·"),
+            ("🪙", "· · · · · ·"),
+            ("✨", "· · · · ·"),
+            ("🪙", "· · · ·"),
+        ]
+        DELAYS = [0.2, 0.2, 0.2, 0.3, 0.3, 0.4, 0.5, 0.6]
+        for (emoji, text), delay in zip(FRAMES, DELAYS):
+            spin = discord.Embed(title=f"{emoji}  Coinflip", description=f"**{text}**", color=COLOR_PURPLE)
+            try:
+                await interaction.response.edit_message(embed=spin, view=self)
+            except Exception:
+                try:
+                    await interaction.edit_original_response(embed=spin, view=self)
+                except Exception:
+                    pass
+            await asyncio.sleep(delay)
+
         # ── Lanza la moneda ───────────────────────────────────
         resultado = _rng.choice(["cara", "cruz"])
 
@@ -299,7 +319,8 @@ class JoinView(discord.ui.View):
                 perdedor_nombre = "🤖 Bot"
                 ganador_profit  = payout - ch.bet
             else:
-                # El bot gana — el creador ya pagó al inicio, no devolvemos nada
+                # El bot gana — el creador ya pagó al inicio
+                payout          = 0                 # No hay payout para el creador
                 ganador_nombre  = "🤖 Bot"
                 perdedor_nombre = ch.creator.mention
                 ganador_profit  = ch.bet
