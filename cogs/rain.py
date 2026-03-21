@@ -312,7 +312,16 @@ class Rain(commands.Cog):
         view   = RainView(self, rain_id)
         embed  = view._build_embed(rain, 0)
 
-        msg = await channel.send(embed=embed, view=view)
+        # Post in rain channel if configured, otherwise use current channel
+        rain_channel_id = await self.bot.db.get_config("rain_channel")
+        rain_role_id    = await self.bot.db.get_config("rain_role")
+        if rain_channel_id:
+            rain_ch = channel.guild.get_channel(int(rain_channel_id))
+            if rain_ch:
+                channel = rain_ch
+
+        ping = f"<@&{rain_role_id}>" if rain_role_id else ""
+        msg  = await channel.send(content=ping, embed=embed, view=view)
         rain["message"] = msg
 
         # Espera la duración y luego finaliza
@@ -351,10 +360,11 @@ class Rain(commands.Cog):
         per_person   = amount // len(participants)
         remainder    = amount - (per_person * len(participants))  # Sobrante por redondeo
 
-        # Añade el saldo a cada participante
+        # Añade el saldo a cada participante + wager requirement 1x
         mention_list = []
         for uid in participants:
             await self.bot.db.add_balance(str(uid), per_person)
+            await self.bot.db.add_wager_requirement(str(uid), per_person)
             mention_list.append(f"<@{uid}>")
 
         # El sobrante vuelve al creador
@@ -373,7 +383,7 @@ class Rain(commands.Cog):
             value=", ".join(mention_list[:20]) + ("..." if len(mention_list) > 20 else ""),
             inline=False
         )
-        embed.set_footer(text=f"Creado por {rain['creator'].display_name}")
+        embed.set_footer(text=f"Creado por {rain['creator'].display_name} • Wager req 1x aplicado")
 
         if msg:
             try:

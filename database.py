@@ -102,6 +102,16 @@ class Database:
                 )
             """)
 
+            # Tabla: wager requerido antes de poder retirar
+            # Se añade con cada depósito, tip, rain o código recibido
+            # Se reduce con cada apuesta hecha en los juegos
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS wager_requirement (
+                    discord_id      TEXT PRIMARY KEY,
+                    pending_wager   INTEGER DEFAULT 0
+                )
+            """)
+
             # Tabla: wallets de crypto generadas por usuario
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS crypto_wallets (
@@ -655,3 +665,40 @@ class Database:
                 "SELECT * FROM codes ORDER BY created_at DESC"
             )
             return await cursor.fetchall()
+
+    # ══════════════════════════════════════════════════════════
+    # MÉTODOS DE WAGER REQUIREMENT
+    # ══════════════════════════════════════════════════════════
+
+    async def add_wager_requirement(self, discord_id: str, amount: int):
+        """Añade wager requerido al usuario (depósito, tip, rain, código)."""
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """INSERT INTO wager_requirement (discord_id, pending_wager)
+                   VALUES (?, ?)
+                   ON CONFLICT(discord_id) DO UPDATE
+                   SET pending_wager = pending_wager + ?""",
+                (discord_id, amount, amount)
+            )
+            await db.commit()
+
+    async def get_wager_requirement(self, discord_id: str) -> int:
+        """Obtiene el wager pendiente de un usuario."""
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "SELECT pending_wager FROM wager_requirement WHERE discord_id = ?",
+                (discord_id,)
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def reduce_wager_requirement(self, discord_id: str, amount: int):
+        """Reduce el wager pendiente cuando el usuario apuesta en un juego."""
+        async with aiosqlite.connect(self.path) as db:
+            await db.execute(
+                """UPDATE wager_requirement
+                   SET pending_wager = MAX(0, pending_wager - ?)
+                   WHERE discord_id = ?""",
+                (amount, discord_id)
+            )
+            await db.commit()

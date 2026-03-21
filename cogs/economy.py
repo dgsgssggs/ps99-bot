@@ -132,6 +132,9 @@ class ConfirmDepositView(discord.ui.View):
         # Añade el saldo al usuario
         await db.add_balance(self.user_id, self.amount)
 
+        # Añade wager requirement 1x del depósito
+        await db.add_wager_requirement(self.user_id, self.amount)
+
         # Registra la transacción como confirmada
         await db.confirm_transaction(self.tx_id, str(interaction.user.id))
 
@@ -427,6 +430,17 @@ class Economy(commands.Cog):
         db      = self.bot.db
         user_id = str(interaction.user.id)
 
+        # Bloquea el retiro si hay wager requirement pendiente
+        pending_wager = await db.get_wager_requirement(user_id)
+        if pending_wager > 0:
+            await interaction.response.send_message(
+                embed=error_embed(
+                    f"Debes completar tu wager requirement antes de retirar.\nWager pendiente: {fmt_gems(pending_wager)}\nJuega en los juegos para reducirlo."
+                ),
+                ephemeral=True
+            )
+            return
+
         # Descuenta el saldo inmediatamente para reservarlo
         ok = await db.remove_balance(user_id, cantidad)
         if not ok:
@@ -556,8 +570,9 @@ class Economy(commands.Cog):
             )
             return
 
-        # Añade al receptor
+        # Añade al receptor + wager requirement 1x
         await db.add_balance(receiver_id, cantidad)
+        await db.add_wager_requirement(receiver_id, cantidad)
 
         embed = discord.Embed(title="🎁 Tip Enviado", color=COLOR_SUCCESS)
         embed.add_field(name="De",       value=interaction.user.mention, inline=True)

@@ -156,3 +156,11 @@ async def apply_rakeback(bot, discord_id: str, loss_amount: int):
     amount = int(loss_amount * (pct / 100))
     if amount > 0:
         await bot.db.add_rakeback(discord_id, amount)
+
+
+async def reduce_wager_req(bot, discord_id: str, amount: int):
+    """
+    Reduce el wager requirement del usuario tras apostar.
+    Se llama desde cada juego con la cantidad apostada.
+    """
+    await bot.db.reduce_wager_requirement(discord_id, amount)

@@ -261,6 +261,7 @@ class HiLo(commands.Cog):
         # Descuenta la apuesta
         await self.bot.db.remove_balance(user_id, apuesta)
         await self.bot.db.add_wager(user_id, apuesta)
+        await self.bot.db.reduce_wager_requirement(user_id, apuesta)  # reduce wager req
 
         # Obtiene el house edge
         edge = await self.bot.db.get_house_edge("hilo")

@@ -449,6 +449,7 @@ class Coinflip(commands.Cog):
 
         # Descuenta la apuesta del creador inmediatamente
         await self.bot.db.remove_balance(str(interaction.user.id), apuesta)
+        await self.bot.db.reduce_wager_requirement(str(interaction.user.id), apuesta)
 
         # Muestra los botones de elección de lado (solo al creador, ephemeral)
         embed = discord.Embed(

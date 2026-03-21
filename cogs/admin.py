@@ -195,10 +195,12 @@ class Admin(commands.Cog):
 
         # Mapa de tipos de canal a claves de configuración
         channel_map = {
-            "deposit":  "deposit_channel",    # Canal para tickets de depósito
-            "withdraw": "withdraw_channel",   # Canal para tickets de retiro
-            "log":      "log_channel",        # Canal para logs del sistema
-            "coinflip": "coinflip_channel"    # Canal exclusivo para coinflip
+            "deposit":  "deposit_channel",
+            "withdraw": "withdraw_channel",
+            "log":      "log_channel",
+            "coinflip": "coinflip_channel",
+            "codes":    "codes_channel",      # Canal donde se postean los códigos canjeados
+            "rain":     "rain_channel"        # Canal donde se postean las rains
         }
 
         tipo = tipo.lower()
@@ -412,6 +414,58 @@ class Admin(commands.Cog):
                 f"Los jugadores recibirán el **{porcentaje}%** de sus pérdidas como rakeback.\n"
                 f"Se acumula automáticamente y se reclama con `/rakeback`."
             )
+        )
+
+
+    # ── /setcodesrole ─────────────────────────────────────────
+    @app_commands.command(
+        name="setcodesrole",
+        description="[OWNER] Rol que recibe ping cuando se canjea un código"
+    )
+    @app_commands.describe(rol="El rol a mencionar")
+    async def setcodesrole(self, interaction: discord.Interaction, rol: discord.Role):
+        if not self.owner_check(interaction):
+            await interaction.response.send_message(
+                embed=error_embed("Solo el owner puede usar este comando."), ephemeral=True
+            )
+            return
+        await self.bot.db.set_config("codes_role", str(rol.id))
+        await interaction.response.send_message(
+            embed=success_embed("Rol de Códigos", f"{rol.mention} recibirá ping al canjear códigos.")
+        )
+
+    # ── /setrainrole ───────────────────────────────────────────
+    @app_commands.command(
+        name="setrainrole",
+        description="[OWNER] Rol que recibe ping cuando hay una rain"
+    )
+    @app_commands.describe(rol="El rol a mencionar")
+    async def setrainrole(self, interaction: discord.Interaction, rol: discord.Role):
+        if not self.owner_check(interaction):
+            await interaction.response.send_message(
+                embed=error_embed("Solo el owner puede usar este comando."), ephemeral=True
+            )
+            return
+        await self.bot.db.set_config("rain_role", str(rol.id))
+        await interaction.response.send_message(
+            embed=success_embed("Rol de Rain", f"{rol.mention} recibirá ping en cada rain.")
+        )
+
+    # ── /setwagerrequirement ───────────────────────────────────
+    @app_commands.command(
+        name="clearwager",
+        description="[OWNER] Limpia el wager requirement de un usuario"
+    )
+    @app_commands.describe(usuario="El usuario al que limpiar el wager")
+    async def clearwager(self, interaction: discord.Interaction, usuario: discord.Member):
+        if not self.owner_check(interaction):
+            await interaction.response.send_message(
+                embed=error_embed("Solo el owner puede usar este comando."), ephemeral=True
+            )
+            return
+        await self.bot.db.reduce_wager_requirement(str(usuario.id), 999_999_999_999)
+        await interaction.response.send_message(
+            embed=success_embed("Wager Limpiado", f"Se eliminó el wager requirement de {usuario.mention}.")
         )
 
 

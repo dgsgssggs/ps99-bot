@@ -148,20 +148,43 @@ class Codes(commands.Cog):
             )
             return
 
-        new_bal = await self.bot.db.get_balance(user_id)
+        # Add 1x wager requirement for code redemption
+        await self.bot.db.add_wager_requirement(user_id, gems_received)
+
+        new_bal   = await self.bot.db.get_balance(user_id)
         uses_left = code_data["total_uses"] - code_data["used_count"] - 1
 
-        embed = discord.Embed(
+        # ── Embed privado para el usuario ─────────────────────
+        user_embed = discord.Embed(
             title="🎁 ¡Código Canjeado!",
             description=f"Has recibido {fmt_gems(gems_received)}",
             color=COLOR_GOLD
         )
-        embed.add_field(name="Código",     value=f"`{codigo}`",          inline=True)
-        embed.add_field(name="Recibido",   value=fmt_gems(gems_received), inline=True)
-        embed.add_field(name="Usos restantes", value=str(max(0, uses_left)), inline=True)
-        embed.set_footer(text=f"Saldo actual: {fmt_gems(new_bal)}")
+        user_embed.add_field(name="Código",          value=f"`{codigo}`",           inline=True)
+        user_embed.add_field(name="Recibido",        value=fmt_gems(gems_received),  inline=True)
+        user_embed.add_field(name="Usos restantes",  value=str(max(0, uses_left)),   inline=True)
+        user_embed.set_footer(text=f"Saldo actual: {fmt_gems(new_bal)} • Wager req: {fmt_gems(gems_received)}")
+        await interaction.response.send_message(embed=user_embed, ephemeral=True)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # ── Embed público en el canal de códigos ──────────────
+        codes_channel_id = await self.bot.db.get_config("codes_channel")
+        codes_role_id    = await self.bot.db.get_config("codes_role")
+
+        if codes_channel_id:
+            channel = interaction.guild.get_channel(int(codes_channel_id))
+            if channel:
+                pub_embed = discord.Embed(
+                    title="🎁 Código Canjeado",
+                    color=COLOR_GOLD
+                )
+                pub_embed.add_field(name="Usuario",  value=interaction.user.mention,  inline=True)
+                pub_embed.add_field(name="Código",   value=f"`{codigo}`",              inline=True)
+                pub_embed.add_field(name="Gemas",    value=fmt_gems(gems_received),    inline=True)
+                pub_embed.set_thumbnail(url=interaction.user.display_avatar.url)
+                pub_embed.set_footer(text=f"Usos restantes: {max(0, uses_left)}")
+
+                ping = f"<@&{codes_role_id}>" if codes_role_id else ""
+                await channel.send(content=ping, embed=pub_embed)
 
     # ── /code delete ──────────────────────────────────────────
     @code_group.command(name="delete", description="[OWNER/ADMIN] Elimina un código")

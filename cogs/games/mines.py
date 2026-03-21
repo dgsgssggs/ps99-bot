@@ -325,6 +325,7 @@ class Mines(commands.Cog):
         user_id = str(interaction.user.id)
         await self.bot.db.remove_balance(user_id, apuesta)
         await self.bot.db.add_wager(user_id, apuesta)
+        await self.bot.db.reduce_wager_requirement(user_id, apuesta)  # reduce wager req
 
         edge = await self.bot.db.get_house_edge("mines")
         game = MinesGame(self.bot, self, interaction.user, apuesta, minas, edge)

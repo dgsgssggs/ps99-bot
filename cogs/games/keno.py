@@ -107,6 +107,7 @@ class Keno(commands.Cog):
         # Descuenta la apuesta
         await self.bot.db.remove_balance(user_id, apuesta)
         await self.bot.db.add_wager(user_id, apuesta)
+        await self.bot.db.reduce_wager_requirement(user_id, apuesta)  # reduce wager req
 
         # ── Sorteo del Keno ──────────────────────────────────
         # El sistema sortea 20 números aleatorios del 1 al 40
