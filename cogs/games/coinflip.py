@@ -393,7 +393,11 @@ class JoinView(discord.ui.View):
                 await self.cog.bot.db.add_rakeback(human_loser_id, rakeback_amt)
                 embed.set_footer(text=f"Rakeback +{fmt_gems(rakeback_amt)} acreditado al perdedor")
 
-        await interaction.response.edit_message(embed=embed, view=self)
+        await asyncio.sleep(0.3)
+        try:
+            await interaction.edit_original_response(embed=embed, view=self)
+        except Exception:
+            pass
 
 
 # ── Helper: construye el embed del reto pendiente ─────────────

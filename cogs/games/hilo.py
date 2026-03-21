@@ -167,7 +167,9 @@ class HiLoGame:
             await interaction.response.edit_message(embed=embed, view=view)
 
         else:
-            # Pierde — se termina la partida sin cobrar
+            # Pierde — LIMPIA active_games inmediatamente
+            self.cog.active_games.pop(self.player_id, None)
+
             self.current_val  = new_val
             self.current_suit = new_suit
             result_text = f"❌ ¡Incorrecto! Perdiste {fmt_gems(self.bet)}"
@@ -175,14 +177,18 @@ class HiLoGame:
             embed = self.build_embed(prev_card, next_card, result_text)
             view  = HiLoView(self)
             for item in view.children:
-                item.disabled = True                           # Desactiva botones
+                item.disabled = True
 
-            # Registra la pérdida
-            await self.bot.db.log_game(
-                str(self.player_id), "hilo", self.bet, "lose", -self.bet
-            )
+            # Rakeback sobre el beneficio de la casa
+            edge_pct_hl  = await self.bot.db.get_house_edge("hilo")
+            house_profit = int(self.bet * edge_pct_hl / 100)
+            rakeback_pct = float(await self.bot.db.get_config("rakeback_pct") or "20")
+            rakeback_amt = int(house_profit * rakeback_pct / 100)
+            if rakeback_amt > 0:
+                await self.bot.db.add_rakeback(str(self.player_id), rakeback_amt)
 
-            # Actualiza roles
+            await self.bot.db.log_game(str(self.player_id), "hilo", self.bet, "lose", -self.bet)
+
             member = interaction.guild.get_member(self.player_id)
             if member:
                 await update_wager_roles(self.bot, interaction.guild, member)
@@ -261,7 +267,6 @@ class HiLo(commands.Cog):
         # Descuenta la apuesta
         await self.bot.db.remove_balance(user_id, apuesta)
         await self.bot.db.add_wager(user_id, apuesta)
-        await self.bot.db.reduce_wager_requirement(user_id, apuesta)  # reduce wager req
 
         # Obtiene el house edge
         edge = await self.bot.db.get_house_edge("hilo")
