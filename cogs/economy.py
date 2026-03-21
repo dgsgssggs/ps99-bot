@@ -433,6 +433,19 @@ class Economy(commands.Cog):
         db      = self.bot.db
         user_id = str(interaction.user.id)
 
+        # Verifica que no tiene wager requirement pendiente
+        pending = await db.get_wager_requirement(user_id)
+        if pending > 0:
+            await interaction.response.send_message(
+                embed=error_embed(
+                    f"Debes apostar antes de retirar.\n"
+                    f"Wager pendiente: {fmt_gems(pending)}\n"
+                    f"Juega en cualquier juego para reducirlo."
+                ),
+                ephemeral=True
+            )
+            return
+
         # Descuenta el saldo inmediatamente para reservarlo
         ok = await db.remove_balance(user_id, cantidad)
         if not ok:

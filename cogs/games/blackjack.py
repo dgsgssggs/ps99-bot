@@ -280,7 +280,7 @@ class Blackjack(commands.Cog):
         user_id = str(interaction.user.id)
         await self.bot.db.remove_balance(user_id, apuesta)
         await self.bot.db.add_wager(user_id, apuesta)
-        await self.bot.db.add_wager_requirement(user_id, apuesta)  # 1x wager req
+        await self.bot.db.reduce_wager_requirement(user_id, apuesta)  # Reduce wager req al jugar
 
         # Crea la partida pasando self (cog) para poder limpiar active_games
         game = BlackjackGame(self.bot, self, interaction.user, apuesta)

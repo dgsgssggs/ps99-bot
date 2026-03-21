@@ -199,6 +199,7 @@ class JoinView(discord.ui.View):
         # Descuenta la apuesta del oponente
         await self.cog.bot.db.remove_balance(str(interaction.user.id), ch.bet)
         await self.cog.bot.db.add_wager(str(interaction.user.id), ch.bet)
+        await self.cog.bot.db.reduce_wager_requirement(str(interaction.user.id), ch.bet)
 
         # Resuelve el coinflip contra un jugador real
         await self._resolve(interaction, opponent=interaction.user, vs_bot=False)
@@ -484,6 +485,7 @@ class Coinflip(commands.Cog):
 
         # Descuenta la apuesta del creador inmediatamente
         await self.bot.db.remove_balance(str(interaction.user.id), apuesta)
+        await self.bot.db.add_wager(str(interaction.user.id), apuesta)
         await self.bot.db.reduce_wager_requirement(str(interaction.user.id), apuesta)
 
         # Muestra los botones de elección de lado (solo al creador, ephemeral)
