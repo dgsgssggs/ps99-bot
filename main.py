@@ -79,4 +79,20 @@ async def main():
 
 # ── Punto de entrada del script ───────────────────────────────
 if __name__ == "__main__":
+    # Health server para Railway — responde en puerto 8080 antes que nada
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        def log_message(self, *a): pass
+
+    _port = int(os.getenv("PORT", 8080))
+    _srv  = HTTPServer(("0.0.0.0", _port), _H)
+    threading.Thread(target=_srv.serve_forever, daemon=True).start()
+    print(f"🌐 Health server en puerto {_port}")
+
     asyncio.run(main())
