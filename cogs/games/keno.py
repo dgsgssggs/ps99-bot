@@ -187,6 +187,18 @@ class Keno(commands.Cog):
         else:
             embed.add_field(name="Resultado", value=f"❌ Perdiste {fmt_gems(apuesta)}", inline=False)
 
+        # Muestra qué habría pagado con un acierto más
+        next_hits = num_hits + 1
+        next_key  = (len(chosen), next_hits)
+        if next_key in KENO_PAYOUTS and next_hits <= len(chosen):
+            next_multi = KENO_PAYOUTS[next_key] * (1 - edge_pct_kn / 100) if profit < 0 else KENO_PAYOUTS.get(next_key, 0) * (1 - await self.bot.db.get_house_edge("keno") / 100)
+            next_payout = int(apuesta * next_multi)
+            embed.add_field(
+                name=f"Con {next_hits} aciertos habrías ganado",
+                value=fmt_gems(next_payout),
+                inline=True
+            )
+
         # Saldo actualizado
         new_bal = await self.bot.db.get_balance(user_id)
         embed.set_footer(text=f"Saldo actual: {fmt_gems(new_bal)}")
