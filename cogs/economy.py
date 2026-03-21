@@ -329,11 +329,12 @@ class Economy(commands.Cog):
     async def deposit(self, interaction: discord.Interaction, cantidad: str):
         """Crea un ticket de depósito para que un agente lo confirme."""
         if not await check_linked(interaction):
-            return                              # Sale si no está vinculado
+            return
 
-        if cantidad <= 0:
+        cantidad = parse_amount(str(cantidad))
+        if not cantidad or cantidad <= 0:
             await interaction.response.send_message(
-                embed=error_embed("La cantidad debe ser mayor a 0."), ephemeral=True
+                embed=error_embed("La cantidad debe ser mayor a 0. Usa K/M/B (ej: 500k, 1m)"), ephemeral=True
             )
             return
 
@@ -431,17 +432,6 @@ class Economy(commands.Cog):
 
         db      = self.bot.db
         user_id = str(interaction.user.id)
-
-        # Bloquea el retiro si hay wager requirement pendiente
-        pending_wager = await db.get_wager_requirement(user_id)
-        if pending_wager > 0:
-            await interaction.response.send_message(
-                embed=error_embed(
-                    f"Debes completar tu wager requirement antes de retirar.\nWager pendiente: {fmt_gems(pending_wager)}\nJuega en los juegos para reducirlo."
-                ),
-                ephemeral=True
-            )
-            return
 
         # Descuenta el saldo inmediatamente para reservarlo
         ok = await db.remove_balance(user_id, cantidad)
