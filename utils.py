@@ -83,6 +83,17 @@ def fmt_gems(amount: int) -> str:
     """💎 1.5K, 💎 10M, 💎 2.5B"""
     return f"💎 {fmt(amount)}"
 
+def fmt_multi(multiplier: float) -> str:
+    """Formats multiplier with exactly 2 decimal places: 1.50x, 2.34x"""
+    return f"{multiplier:.2f}x"
+
+def exact_payout(bet: int, multiplier: float) -> int:
+    """
+    Calculates exact integer payout with no floating point errors.
+    Uses round() then int() to avoid truncation issues.
+    """
+    return int(round(bet * multiplier, 0))
+
 def parse_amount(value: str) -> int | None:
     """
     Parsea una cantidad con K/M/B como sufijo.

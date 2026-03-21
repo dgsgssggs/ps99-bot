@@ -15,7 +15,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from utils import (
-    is_owner, is_admin,
+    is_owner, is_admin, parse_amount,
     check_linked, fmt_gems,
     error_embed, success_embed,
     COLOR_GOLD, COLOR_INFO, COLOR_ERROR
@@ -42,7 +42,7 @@ class Codes(commands.Cog):
         self,
         interaction: discord.Interaction,
         codigo: str,
-        gemas: int,
+        gemas: str,
         usos: int
     ):
         """
@@ -60,9 +60,10 @@ class Codes(commands.Cog):
             )
             return
 
-        if gemas <= 0:
+        gemas = parse_amount(str(gemas))
+        if not gemas or gemas <= 0:
             await interaction.response.send_message(
-                embed=error_embed("Las gemas deben ser mayor a 0."), ephemeral=True
+                embed=error_embed("Gemas inválidas. Usa K/M/B (ej: 1m, 500k)"), ephemeral=True
             )
             return
 

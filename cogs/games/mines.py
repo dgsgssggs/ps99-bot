@@ -84,7 +84,7 @@ class MinesGame:
         """Construye el embed informativo con stats de la partida."""
         safe = self.safe_count()
         mult = self.calc_multiplier(safe)
-        pot  = int(self.bet * mult)
+        pot  = int(round(self.bet * mult, 0))
 
         if result_text:
             color = COLOR_GOLD if "💰" in result_text else COLOR_ERROR
@@ -257,7 +257,7 @@ async def _cashout(self, interaction: discord.Interaction):
 
     safe   = self.safe_count()
     mult   = self.calc_multiplier(safe)
-    payout = int(self.bet * mult)
+    payout = int(round(self.bet * mult, 0))
     profit = payout - self.bet
 
     await self.bot.db.add_balance(str(self.player_id), payout)

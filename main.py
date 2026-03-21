@@ -42,7 +42,6 @@ COGS = [
     "cogs.games.hilo",       # Juego: Hi-Lo
     "cogs.games.coinflip",   # Juego: Coinflip PvP
     "cogs.games.mines",      # Juego: Minas
-    "cogs.games.keno",       # Juego: Keno
 ]
 
 # ── Evento: Bot listo ─────────────────────────────────────────

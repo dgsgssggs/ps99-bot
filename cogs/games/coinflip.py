@@ -132,28 +132,18 @@ class JoinView(discord.ui.View):
         self.challenge = challenge
 
     async def on_timeout(self):
-        """Nadie se unió — devuelve la apuesta y cierra el reto."""
+        """Nadie se unió — devuelve la apuesta y borra el mensaje silenciosamente."""
         ch = self.challenge
         if ch.resolved:
             return
         ch.resolved = True
         self.cog.active_challenges.pop(ch.creator_id, None)
 
-        # Devuelve el saldo al creador
         await self.cog.bot.db.add_balance(str(ch.creator_id), ch.bet)
 
-        for item in self.children:
-            item.disabled = True
         try:
-            embed = discord.Embed(
-                title="🪙 Coinflip — Expirado",
-                description=(
-                    f"Nadie aceptó el reto de {ch.creator.mention}.\n"
-                    f"Se devuelven {fmt_gems(ch.bet)}."
-                ),
-                color=0x95a5a6
-            )
-            await ch.message.edit(embed=embed, view=self)
+            if ch.message:
+                await ch.message.delete()
         except Exception:
             pass
 
@@ -315,7 +305,7 @@ class JoinView(discord.ui.View):
             # ── Contra el bot ──────────────────────────────────
             if creator_wins:
                 # El creador gana — el bot le paga (house paga)
-                payout = int(ch.bet * 2 * payout_factor)
+                payout = int(round(ch.bet * 2 * payout_factor, 0))
                 await self.cog.bot.db.add_balance(str(ch.creator_id), payout)
                 ganador_nombre = ch.creator.mention
                 perdedor_nombre = "🤖 Bot"
@@ -348,7 +338,7 @@ class JoinView(discord.ui.View):
                 ganador   = opponent
                 perdedor  = ch.creator
 
-            payout = int(ch.bet * 2 * payout_factor)
+            payout = int(round(ch.bet * 2 * payout_factor, 0))
             await self.cog.bot.db.add_balance(str(ganador.id), payout)
             await self.cog.bot.db.add_wager(str(ch.creator_id), ch.bet)
 
@@ -395,7 +385,7 @@ class JoinView(discord.ui.View):
         )
         embed.add_field(
             name="🏆 Ganador",
-            value=f"{ganador_nombre} gana {fmt_gems(int(ch.bet * 2 * payout_factor))}",
+            value=f"{ganador_nombre} gana {fmt_gems(int(round(ch.bet * 2 * payout_factor, 0)))}",
             inline=False
         )
 
@@ -419,6 +409,15 @@ class JoinView(discord.ui.View):
         await asyncio.sleep(0.3)
         try:
             await interaction.edit_original_response(embed=embed, view=self)
+        except Exception:
+            pass
+
+        # Auto-delete after 5 seconds
+        await asyncio.sleep(5)
+        try:
+            msg = ch.message
+            if msg:
+                await msg.delete()
         except Exception:
             pass
 

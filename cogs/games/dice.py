@@ -113,8 +113,8 @@ class Dice(commands.Cog):
 
         else:
             # ── Alto o Bajo ───────────────────────────────────
-            # Paga ~2x la apuesta por acertar 1 de 2 opciones
-            payout_multi = 1.9 * multiplier_factor  # Ligeramente bajo 2x por house edge
+            # 50/50 chance. Total return = 2x - edge. Profit = (2*factor - 1) * bet
+            payout_multi = (2.0 * multiplier_factor) - 1  # Net profit multiplier
             ab = alto_bajo.lower()
 
             if ab in ["alto", "high"]:
@@ -126,7 +126,7 @@ class Dice(commands.Cog):
 
         # ── Calcula el resultado ─────────────────────────────
         if won:
-            payout = int(apuesta * payout_multi) # Ganancia calculada con el multiplicador
+            payout = int(round(apuesta * payout_multi, 0))  # Net profit (no floating point errors)
             await self.bot.db.add_balance(user_id, apuesta + payout)  # Devuelve apuesta + ganancia
             profit     = payout
             result_str = f"✅ ¡Ganaste {fmt_gems(payout)}!"

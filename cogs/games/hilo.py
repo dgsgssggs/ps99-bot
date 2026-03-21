@@ -119,7 +119,7 @@ class HiLoGame:
         embed.add_field(name="Apuesta Base",  value=fmt_gems(self.bet),                    inline=True)
 
         # Ganancia potencial actual
-        potential = int(self.bet * self.multiplier)
+        potential = int(round(self.bet * self.multiplier, 0))
         embed.add_field(name="Ganancia Potencial", value=fmt_gems(potential),              inline=True)
 
         # Muestra la carta anterior y la nueva si aplica
@@ -201,7 +201,7 @@ class HiLoGame:
         # Limpia active_games al cobrar
         self.cog.active_games.pop(self.player_id, None)
 
-        payout  = int(self.bet * self.multiplier)
+        payout  = int(round(self.bet * self.multiplier, 0))
         profit  = payout - self.bet
 
         await self.bot.db.add_balance(str(self.player_id), payout)
