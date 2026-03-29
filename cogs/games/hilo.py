@@ -1,23 +1,27 @@
 # ============================================================
 # cogs/games/hilo.py — Juego Hi-Lo (Mayor/Menor)
 # ============================================================
-# Multiplicador basado en probabilidad real de cada carta.
-# Hi con un 2 vale mucho menos que Hi con un Q.
-# Cada ronda multiplica el acumulado por el multiplicador
-# de la siguiente apuesta (no es plano +0.5x).
+# FIX: Los botones muestran el multiplicador TOTAL resultante
+# (no el factor por turno). Así "→ x3.12" en el botón significa
+# que si ganas TENDRÁS x3.12 acumulado total.
+#
+# Lógica:
+#   self.multiplier  → acumulado actual (empieza en 1.0)
+#   round_factor()   → factor de este turno (p.ej. 2.06)
+#   resultado        → self.multiplier * round_factor()
+#   Botón muestra    → "x{resultado}" (el TOTAL que tendrías)
 # ============================================================
 
 import discord
 from discord.ext import commands
 from discord import app_commands
 import random
-import secrets
 _rng = random.SystemRandom()
 from utils import (
     parse_amount,
     check_linked, check_balance, fmt_gems,
     error_embed, update_wager_roles,
-    COLOR_GOLD, COLOR_ERROR, COLOR_INFO
+    COLOR_GOLD, COLOR_ERROR, COLOR_INFO, COLOR_PURPLE
 )
 
 CARD_NAMES = {
@@ -32,38 +36,31 @@ def random_card() -> tuple:
 def card_name(value: int, suit: str) -> str:
     return f"{CARD_NAMES[value]}{suit}"
 
-def round_multiplier(card_val: int, choice: str, edge: float) -> float:
+def round_factor(card_val: int, choice: str, edge: float):
     """
-    Calcula el multiplicador de una ronda basado en la probabilidad real.
-    Hay 13 cartas posibles (1-13). Empates pierden.
-    Hi con K = imposible (mult infinito → botón desactivado).
-    Lo con A = imposible (mult infinito → botón desactivado).
+    Factor multiplicador para este turno.
+    Si ganas, tu acumulado se multiplica por este valor.
+    Retorna None si la jugada es imposible (A→Menor, K→Mayor).
     """
-    if choice == "hi":
-        win_cards = 13 - card_val          # cartas estrictamente mayores
-    else:
-        win_cards = card_val - 1           # cartas estrictamente menores
-
+    win_cards = (13 - card_val) if choice == "hi" else (card_val - 1)
     if win_cards <= 0:
-        return None                        # Imposible — botón desactivado
-
+        return None
     prob = win_cards / 13
-    fair = 1.0 / prob
-    return round(fair * (1 - edge / 100), 2)
+    return round((1.0 / prob) * (1 - edge / 100), 2)
 
 def win_prob_pct(card_val: int, choice: str) -> str:
-    """Devuelve la probabilidad en % para mostrar en el embed."""
-    if choice == "hi":
-        win_cards = 13 - card_val
-    else:
-        win_cards = card_val - 1
+    win_cards = (13 - card_val) if choice == "hi" else (card_val - 1)
     if win_cards <= 0:
         return "0%"
-    return f"{win_cards/13*100:.0f}%"
+    return f"{win_cards / 13 * 100:.0f}%"
 
 
 class HiLoView(discord.ui.View):
-    """Botones Hi / Lo / Cobrar con probabilidades dinámicas."""
+    """
+    Botones con el multiplicador TOTAL resultante visible.
+    Si estás en x2.00 y el turno da factor x2.06,
+    el botón muestra "→ x4.12" (no "→ x2.06").
+    """
 
     def __init__(self, game):
         super().__init__(timeout=600)
@@ -71,38 +68,44 @@ class HiLoView(discord.ui.View):
         self._update_buttons()
 
     def _update_buttons(self):
-        """Actualiza etiquetas y disponibilidad de botones según la carta actual."""
-        v     = self.game.current_val
-        edge  = self.game.house_edge
+        v           = self.game.current_val
+        edge        = self.game.house_edge
+        accumulated = self.game.multiplier
         self.clear_items()
 
-        # Botón Higher
-        hi_mult = round_multiplier(v, "hi", edge)
-        hi_btn  = discord.ui.Button(
-            label     = f"🔼 Mayor  {win_prob_pct(v, 'hi')}  →  x{hi_mult:.2f}" if hi_mult else "🔼 Mayor (imposible)",
-            style     = discord.ButtonStyle.primary if hi_mult else discord.ButtonStyle.secondary,
-            disabled  = hi_mult is None,
+        # Botón Mayor
+        hi_f   = round_factor(v, "hi", edge)
+        hi_res = round(accumulated * hi_f, 2) if hi_f else None
+        hi_btn = discord.ui.Button(
+            label     = (f"🔼 Mayor  {win_prob_pct(v,'hi')}  →  x{hi_res:.2f}"
+                         if hi_res else "🔼 Mayor (imposible)"),
+            style     = discord.ButtonStyle.primary if hi_f else discord.ButtonStyle.secondary,
+            disabled  = hi_f is None,
             custom_id = "hilo_hi"
         )
         hi_btn.callback = self._hi_callback
         self.add_item(hi_btn)
 
-        # Botón Lower
-        lo_mult = round_multiplier(v, "lo", edge)
-        lo_btn  = discord.ui.Button(
-            label     = f"🔽 Menor  {win_prob_pct(v, 'lo')}  →  x{lo_mult:.2f}" if lo_mult else "🔽 Menor (imposible)",
-            style     = discord.ButtonStyle.primary if lo_mult else discord.ButtonStyle.secondary,
-            disabled  = lo_mult is None,
+        # Botón Menor
+        lo_f   = round_factor(v, "lo", edge)
+        lo_res = round(accumulated * lo_f, 2) if lo_f else None
+        lo_btn = discord.ui.Button(
+            label     = (f"🔽 Menor  {win_prob_pct(v,'lo')}  →  x{lo_res:.2f}"
+                         if lo_res else "🔽 Menor (imposible)"),
+            style     = discord.ButtonStyle.primary if lo_f else discord.ButtonStyle.secondary,
+            disabled  = lo_f is None,
             custom_id = "hilo_lo"
         )
         lo_btn.callback = self._lo_callback
         self.add_item(lo_btn)
 
-        # Botón Cobrar
+        # Botón Cobrar (desactivado en el primer turno antes de jugar)
+        pot = int(round(self.game.bet * accumulated, 0))
         cashout_btn = discord.ui.Button(
-            label     = "💰 Cobrar",
+            label     = f"💰 Cobrar {fmt_gems(pot)}",
             style     = discord.ButtonStyle.success,
-            custom_id = "hilo_cashout"
+            custom_id = "hilo_cashout",
+            disabled  = self.game.round == 1
         )
         cashout_btn.callback = self._cashout_callback
         self.add_item(cashout_btn)
@@ -126,28 +129,39 @@ class HiLoView(discord.ui.View):
         await self.game.cashout(interaction)
 
     async def on_timeout(self):
-        """10 min sin actividad — termina la partida y devuelve la apuesta."""
-        self.game.cog.active_games.pop(self.game.player_id, None)
-        # Devuelve la apuesta si el jugador no cobró
-        if self.game.bet > 0:
-            await self.game.bot.db.add_balance(str(self.game.player_id), self.game.bet)
+        """10 min — auto-cobra si hay multiplicador, devuelve apuesta si no."""
+        game = self.game
+        game.cog.active_games.pop(game.player_id, None)
+        if game.multiplier > 1.0:
+            payout = int(round(game.bet * game.multiplier, 0))
+            await game.bot.db.add_balance(str(game.player_id), payout)
+        elif game.round == 1:
+            await game.bot.db.add_balance(str(game.player_id), game.bet)
         for item in self.children:
             item.disabled = True
         try:
-            msg = self.game.message
-            if msg:
+            if game.message:
+                payout = int(round(game.bet * game.multiplier, 0))
                 embed = discord.Embed(
                     title="⏰ Hi-Lo — Tiempo agotado",
-                    description="La partida expiró por inactividad. Se devuelve tu apuesta.",
+                    description=f"Partida expirada. Cobrado automáticamente: {fmt_gems(payout)}",
                     color=0x95a5a6
                 )
-                await msg.edit(embed=embed, view=self)
+                await game.message.edit(embed=embed, view=self)
         except Exception:
             pass
 
 
 class HiLoGame:
-    """Partida de Hi-Lo con multiplicadores basados en probabilidad real."""
+    """
+    Partida de Hi-Lo.
+
+    Multiplicadores:
+      self.multiplier  = acumulado (starts at 1.0)
+      round_factor()   = factor del turno según probabilidad con edge
+      on win:          self.multiplier *= round_factor()
+      payout:          bet * self.multiplier
+    """
 
     def __init__(self, bot, cog, player: discord.Member, bet: int, house_edge: float):
         self.bot         = bot
@@ -157,36 +171,51 @@ class HiLoGame:
         self.bet         = bet
         self.house_edge  = house_edge
         self.current_val, self.current_suit = random_card()
-        self.multiplier  = 1.0       # Multiplicador acumulado
+        self.multiplier  = 1.0
         self.round       = 1
         self.message     = None
 
-    def build_embed(self, prev_card=None, next_card=None, result=None):
-        v     = self.current_val
-        edge  = self.house_edge
-        color = COLOR_INFO if not result else (COLOR_GOLD if "cobrado" in result.lower() or "correcto" in result.lower() else COLOR_ERROR)
+    def build_embed(self, prev_card=None, next_card=None, result=None) -> discord.Embed:
+        v   = self.current_val
+        acc = self.multiplier
+        edge = self.house_edge
 
-        embed = discord.Embed(title=f"🎴 Hi-Lo — {self.player.display_name}", color=color)
-        embed.add_field(name="Carta actual",    value=f"**{card_name(v, self.current_suit)}**", inline=True)
-        embed.add_field(name="Ronda",           value=f"#{self.round}",                         inline=True)
-        embed.add_field(name="Multiplicador",   value=f"x{self.multiplier:.2f}",                inline=True)
-        embed.add_field(name="Apuesta base",    value=fmt_gems(self.bet),                        inline=True)
+        if result and "❌" in result:
+            color = COLOR_ERROR
+        elif result and ("✅" in result or "cobrado" in result.lower()):
+            color = COLOR_GOLD
+        else:
+            color = COLOR_PURPLE
 
-        pot = int(round(self.bet * self.multiplier, 0))
-        embed.add_field(name="Si cobras ahora", value=fmt_gems(pot),                            inline=True)
+        pot = int(round(self.bet * acc, 0))
+        embed = discord.Embed(title=f"🎴 Hi-Lo  —  {self.player.display_name}", color=color)
+        embed.add_field(name="Carta actual",          value=f"## {card_name(v, self.current_suit)}", inline=True)
+        embed.add_field(name="Turno",                 value=f"**#{self.round}**",   inline=True)
+        embed.add_field(name="Multiplicador",         value=f"**x{acc:.2f}**",      inline=True)
+        embed.add_field(name="Apuesta original",      value=fmt_gems(self.bet),     inline=True)
+        embed.add_field(name="💰 Si cobras ahora",    value=fmt_gems(pot),          inline=True)
+        embed.add_field(name="\u200b",                value="\u200b",               inline=True)
 
-        # Mostrar siguiente payout si acierta Hi o Lo
-        hi_mult = round_multiplier(v, "hi", edge)
-        lo_mult = round_multiplier(v, "lo", edge)
-        if hi_mult:
-            next_hi = int(round(self.bet * self.multiplier * hi_mult, 0))
-            embed.add_field(name=f"Si acierta Mayor ({win_prob_pct(v, 'hi')})", value=fmt_gems(next_hi), inline=True)
-        if lo_mult:
-            next_lo = int(round(self.bet * self.multiplier * lo_mult, 0))
-            embed.add_field(name=f"Si acierta Menor ({win_prob_pct(v, 'lo')})", value=fmt_gems(next_lo), inline=True)
+        # Si ganas mayor/menor → muestra el total que tendrías
+        hi_f = round_factor(v, "hi", edge)
+        lo_f = round_factor(v, "lo", edge)
+        if hi_f:
+            hi_total = round(acc * hi_f, 2)
+            hi_pot   = int(round(self.bet * hi_total, 0))
+            embed.add_field(
+                name=f"🔼 Si Mayor ({win_prob_pct(v,'hi')}) → x{hi_total:.2f}",
+                value=fmt_gems(hi_pot), inline=True
+            )
+        if lo_f:
+            lo_total = round(acc * lo_f, 2)
+            lo_pot   = int(round(self.bet * lo_total, 0))
+            embed.add_field(
+                name=f"🔽 Si Menor ({win_prob_pct(v,'lo')}) → x{lo_total:.2f}",
+                value=fmt_gems(lo_pot), inline=True
+            )
 
         if prev_card and next_card:
-            embed.add_field(name="Resultado ronda", value=f"{prev_card} → {next_card}", inline=False)
+            embed.add_field(name="Turno anterior", value=f"{prev_card} → **{next_card}**", inline=False)
         if result:
             embed.add_field(name="Estado", value=result, inline=False)
 
@@ -199,38 +228,27 @@ class HiLoGame:
         new_val, new_suit = random_card()
         next_card = card_name(new_val, new_suit)
 
-        if choice == "hi":
-            won = new_val > prev_val
-        else:
-            won = new_val < prev_val
-
-        # Empate siempre pierde
+        won = (new_val > prev_val) if choice == "hi" else (new_val < prev_val)
         if new_val == prev_val:
-            won = False
+            won = False   # Empate = pierde
 
         if won:
-            # Multiplica el acumulado por el multiplicador de esta ronda
-            r_mult          = round_multiplier(prev_val, choice, self.house_edge)
-            self.multiplier = round(self.multiplier * r_mult, 2)
+            factor           = round_factor(prev_val, choice, self.house_edge)
+            self.multiplier  = round(self.multiplier * factor, 2)
             self.current_val  = new_val
             self.current_suit = new_suit
             self.round       += 1
 
-            result_text = f"✅ ¡Correcto! Multiplicador acumulado: x{self.multiplier:.2f}"
+            pot         = int(round(self.bet * self.multiplier, 0))
+            result_text = f"✅ **¡Correcto!** x{self.multiplier:.2f} acumulado → cobrarías {fmt_gems(pot)}"
             view  = HiLoView(self)
             embed = self.build_embed(prev_card, next_card, result_text)
             await interaction.response.edit_message(embed=embed, view=view)
 
         else:
-            # Pierde — limpia y da rakeback
             self.cog.active_games.pop(self.player_id, None)
 
-            result_text = f"❌ ¡Incorrecto! Perdiste {fmt_gems(self.bet)}"
-            view  = HiLoView(self)
-            for item in view.children:
-                item.disabled = True
-
-            # Rakeback: % del house_profit, no del total apostado
+            # Rakeback
             edge_pct     = await self.bot.db.get_house_edge("hilo")
             house_profit = int(self.bet * edge_pct / 100)
             rakeback_pct = float(await self.bot.db.get_config("rakeback_pct") or "20")
@@ -243,8 +261,16 @@ class HiLoGame:
             if member:
                 await update_wager_roles(self.bot, interaction.guild, member)
 
+            result_text = (
+                f"❌ **¡Incorrecto!** La carta era **{next_card}**.\n"
+                f"Perdiste {fmt_gems(self.bet)} (llegaste a x{self.multiplier:.2f})"
+            )
             self.current_val  = new_val
             self.current_suit = new_suit
+
+            view = HiLoView(self)
+            for item in view.children:
+                item.disabled = True
             embed = self.build_embed(prev_card, next_card, result_text)
             await interaction.response.edit_message(embed=embed, view=view)
 
@@ -262,11 +288,16 @@ class HiLoGame:
         if member:
             await update_wager_roles(self.bot, interaction.guild, member)
 
+        new_bal = await self.bot.db.get_balance(str(self.player_id))
         embed = discord.Embed(
             title="💰 Hi-Lo — Cobrado",
-            description=f"Apostaste {fmt_gems(self.bet)} y cobras {fmt_gems(payout)}.\nGanancia neta: {fmt_gems(profit)}",
+            description=(
+                f"Apostaste {fmt_gems(self.bet)} · Multiplicador final: **x{self.multiplier:.2f}**\n"
+                f"**Cobras: {fmt_gems(payout)}** · Ganancia: {fmt_gems(profit)}"
+            ),
             color=COLOR_GOLD
         )
+        embed.set_footer(text=f"Saldo: {fmt_gems(new_bal)}")
         view = HiLoView(self)
         for item in view.children:
             item.disabled = True
@@ -280,15 +311,16 @@ class HiLo(commands.Cog):
         self.active_games = {}
 
     @app_commands.command(name="hilo", description="Adivina si la siguiente carta será mayor o menor")
-    @app_commands.describe(apuesta="Cantidad de gemas a apostar")
+    @app_commands.describe(apuesta="Gemas a apostar (ej: 500k, 1m, 2.5b)")
     async def hilo(self, interaction: discord.Interaction, apuesta: str):
         if not await check_linked(interaction):
             return
 
-        apuesta = parse_amount(str(apuesta))
-        if not apuesta or apuesta <= 0:
+        amount = parse_amount(str(apuesta))
+        if not amount or amount <= 0:
             await interaction.response.send_message(
-                embed=error_embed("La apuesta debe ser mayor a 0. Usa K/M/B"), ephemeral=True
+                embed=error_embed("Apuesta inválida. Usa K/M/B (ej: 500k, 1m, 2.5b)"),
+                ephemeral=True
             )
             return
 
@@ -298,21 +330,20 @@ class HiLo(commands.Cog):
             )
             return
 
-        if not await check_balance(interaction, apuesta):
+        if not await check_balance(interaction, amount):
             return
 
         user_id = str(interaction.user.id)
-        await self.bot.db.remove_balance(user_id, apuesta)
-        await self.bot.db.add_wager(user_id, apuesta)
-        await self.bot.db.reduce_wager_requirement(user_id, apuesta)
+        await self.bot.db.remove_balance(user_id, amount)
+        await self.bot.db.add_wager(user_id, amount)
+        await self.bot.db.reduce_wager_requirement(user_id, amount)
 
         edge = await self.bot.db.get_house_edge("hilo")
-        game = HiLoGame(self.bot, self, interaction.user, apuesta, edge)
+        game = HiLoGame(self.bot, self, interaction.user, amount, edge)
         self.active_games[interaction.user.id] = game
 
         embed = game.build_embed()
         view  = HiLoView(game)
-
         await interaction.response.send_message(embed=embed, view=view)
         msg = await interaction.original_response()
         game.message = msg

@@ -36,12 +36,14 @@ COGS = [
     "cogs.logs_cog",         # Comandos: /logs
     "cogs.rain",             # Comando: /rain (lluvia de gemas)
     "cogs.codes",            # Comandos: /code create|redeem|delete|list
-    "cogs.crypto",           # Comandos: /deposit_crypto, /crypto_balance, /setgemrate
     "cogs.games.blackjack",  # Juego: Blackjack
     "cogs.games.dice",       # Juego: Dados
     "cogs.games.hilo",       # Juego: Hi-Lo
     "cogs.games.coinflip",   # Juego: Coinflip PvP
     "cogs.games.mines",      # Juego: Minas
+    "cogs.games.towers",     # Juego: Torres
+    "cogs.games.crash",      # Juego: Crash (cohete)
+    #
 ]
 
 # ── Evento: Bot listo ─────────────────────────────────────────

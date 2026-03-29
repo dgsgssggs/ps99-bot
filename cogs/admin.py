@@ -193,6 +193,7 @@ class Admin(commands.Cog):
         app_commands.Choice(name="coinflip — Canal de coinflips",     value="coinflip"),
         app_commands.Choice(name="rain     — Canal de rains",         value="rain"),
         app_commands.Choice(name="codes    — Canal de códigos",       value="codes"),
+        app_commands.Choice(name="crash    — Canal del juego Crash",   value="crash"),
     ])
     async def setchannel(self, interaction: discord.Interaction, tipo: str, canal: discord.TextChannel):
         """Configura los canales usados por el bot."""
@@ -208,7 +209,8 @@ class Admin(commands.Cog):
             "withdraw": "withdraw_channel",
             "log":      "log_channel",
             "coinflip": "coinflip_channel",
-            "codes":    "codes_channel",      # Canal donde se postean los códigos canjeados
+            "codes":    "codes_channel",
+            "crash":    "crash_channel",      # Canal donde se postean los códigos canjeados
             "rain":     "rain_channel"        # Canal donde se postean las rains
         }
 

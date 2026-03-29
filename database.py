@@ -467,16 +467,6 @@ class Database:
     # MÉTODOS DE RAKEBACK
     # ══════════════════════════════════════════════════════════
 
-    async def add_rakeback(self, discord_id: str, amount: int):
-        """Acumula gemas de rakeback tras cada pérdida del jugador."""
-        async with aiosqlite.connect(self.path) as db:
-            await db.execute(
-                """INSERT INTO rakeback (discord_id, pending) VALUES (?, ?)
-                   ON CONFLICT(discord_id) DO UPDATE SET pending = pending + ?""",
-                (discord_id, amount, amount)
-            )
-            await db.commit()
-
     async def get_rakeback(self, discord_id: str) -> int:
         """Obtiene el rakeback pendiente de un usuario."""
         async with aiosqlite.connect(self.path) as db:
