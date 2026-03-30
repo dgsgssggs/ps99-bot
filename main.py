@@ -38,7 +38,6 @@ COGS = [
     "cogs.codes",            # Comandos: /code create|redeem|delete|list
     "cogs.games.blackjack",  # Juego: Blackjack
     "cogs.games.dice",       # Juego: Dados
-    "cogs.games.hilo",       # Juego: Hi-Lo
     "cogs.games.coinflip",   # Juego: Coinflip PvP
     "cogs.games.mines",      # Juego: Minas
     "cogs.games.towers",     # Juego: Torres

@@ -1,11 +1,13 @@
 # ============================================================
-# cogs/games/crash.py — Juego del Cohete (Crash)
+# cogs/games/crash.py — Crash
 # ============================================================
-# Multiplicador: sube de 1.01 → 1.02 → 1.03... (+0.01 por tick)
-# Tick: cada 0.5s = +0.01 → sube 0.02x por segundo
-# Crash: 2s de pausa → nueva ronda automática
-# House edge 5%: P(crash > x) ≈ 0.95/x
-# Canal específico: configurar con /setchannel tipo:crash
+# Velocidad estilo Stake (exponencial):
+#   mult(t) = e^(k*t)  donde k = ln(1.25)/3 ≈ 0.07438
+#   → los primeros 0.25x (1.00→1.25) duran exactamente 3 segundos
+#   → luego acelera exponencialmente (a los 10s ≈ 2.10x, 20s ≈ 4.43x)
+# Ticks internos cada 0.1s; Discord se actualiza cada 0.5s.
+# Pausa post-crash: 2 segundos → nueva ronda.
+# House edge 5%: crash point generado con fórmula probabilística.
 # ============================================================
 
 import discord
@@ -19,30 +21,33 @@ _rng = random.SystemRandom()
 from utils import (
     parse_amount, check_linked, fmt_gems,
     error_embed, update_wager_roles,
-    COLOR_GOLD, COLOR_ERROR, COLOR_INFO, COLOR_PURPLE
+    COLOR_GOLD, COLOR_ERROR, COLOR_INFO
 )
 
-BETTING_WINDOW = 10      # segundos de betting window
-TICK_INTERVAL  = 0.5     # segundos entre ticks de multiplicador
-MULT_INCREMENT = 0.01    # incremento por tick (1.01 → 1.02 → ...)
-MIN_CRASH      = 1.01    # mínimo crash posible
-HOUSE_EDGE     = 0.05    # 5%
-CRASH_PAUSE    = 2       # segundos entre crash y nueva ronda
+BETTING_WINDOW = 10       # segundos de betting window
+TICK_INTERVAL  = 0.1      # ticks internos (s) — no se muestra en Discord
+DISPLAY_EVERY  = 0.5      # actualiza Discord cada X segundos
+CRASH_PAUSE    = 2        # segundos post-crash antes de nueva ronda
+HOUSE_EDGE     = 0.05     # 5%
+
+# k tal que e^(k*3) = 1.25  →  primeros 0.25x en 3 segundos
+_K = math.log(1.25) / 3.0  # ≈ 0.07438
+
+
+def mult_at(t: float) -> float:
+    """Multiplicador en el segundo t usando crecimiento exponencial estilo Stake."""
+    return round(math.exp(_K * t), 2)
 
 
 def generate_crash_point() -> float:
     """
-    Genera el punto de crash con 5% house edge.
-    Formula: 0.95 / (1 - r)  donde r ∈ [0, 1)
-    P(crash > x) = 0.95/x  para x ≥ 1
-    ~5% del tiempo crashea en el mínimo (house edge instantáneo).
+    Crash point con 5% house edge.
+    P(crash > x) = 0.95/x  para x ≥ 1.0
     """
     r = _rng.random()
     if r >= 0.95:
-        return MIN_CRASH
-    crash = 0.95 / (1.0 - r)
-    # Redondea al 0.01 más cercano
-    return round(max(MIN_CRASH, crash), 2)
+        return 1.00          # ~5% → crash instantáneo
+    return round(max(1.00, 0.95 / (1.0 - r)), 2)
 
 
 class CrashBet:
@@ -70,7 +75,7 @@ class CrashGame:
 
 
 class CrashView(discord.ui.View):
-    """Vista activa durante la subida — botón Cashout."""
+    """Vista activa durante la subida — solo botón Cashout."""
 
     def __init__(self, cog):
         super().__init__(timeout=None)
@@ -82,7 +87,7 @@ class CrashView(discord.ui.View):
         uid  = str(interaction.user.id)
 
         if game.state != CrashGame.RUNNING:
-            await interaction.response.send_message("No hay ronda activa.", ephemeral=True)
+            await interaction.response.defer()
             return
 
         bet = game.bets.get(uid)
@@ -90,9 +95,7 @@ class CrashView(discord.ui.View):
             await interaction.response.send_message("No tienes apuesta en esta ronda.", ephemeral=True)
             return
         if bet.cashed_out:
-            await interaction.response.send_message(
-                f"Ya cobraste a x{bet.cashout_mult:.2f}.", ephemeral=True
-            )
+            await interaction.response.defer()
             return
 
         bet.cashed_out   = True
@@ -108,7 +111,7 @@ class CrashView(discord.ui.View):
 
         await interaction.response.send_message(
             embed=discord.Embed(
-                description=f"✅ Cobrado a **x{game.multiplier:.2f}** — {fmt_gems(payout)} (+{fmt_gems(profit)})",
+                description=f"✅ Cobrado a **x{game.multiplier:.2f}** — {fmt_gems(payout)}",
                 color=COLOR_GOLD
             ),
             ephemeral=True
@@ -147,7 +150,7 @@ class BetModal(discord.ui.Modal, title="🚀 Apostar en Crash"):
         uid  = str(interaction.user.id)
 
         if game.state != CrashGame.BETTING:
-            await interaction.response.send_message("La betting window ha cerrado.", ephemeral=True)
+            await interaction.response.defer()
             return
 
         amount = parse_amount(self.amount_input.value)
@@ -167,7 +170,7 @@ class BetModal(discord.ui.Modal, title="🚀 Apostar en Crash"):
             )
             return
 
-        # Reembolsa apuesta anterior si la hay
+        # Reembolsa apuesta anterior si existe
         if uid in game.bets:
             await self.cog.bot.db.add_balance(uid, game.bets[uid].amount)
 
@@ -178,23 +181,19 @@ class BetModal(discord.ui.Modal, title="🚀 Apostar en Crash"):
         auto = game.bets[uid].auto_cashout if uid in game.bets else None
         game.bets[uid] = CrashBet(interaction.user, amount, auto)
 
-        msg = f"✅ Apuesta: {fmt_gems(amount)}"
-        if auto:
-            msg += f" · Auto cashout: **x{auto:.2f}**"
-        await interaction.response.send_message(
-            embed=discord.Embed(description=msg, color=COLOR_INFO), ephemeral=True
-        )
+        # Sin notificación — la apuesta aparece en el embed del canal
+        await interaction.response.defer()
 
 
 class AutoCashoutModal(discord.ui.Modal, title="⚙️ Auto Cashout"):
     mult_input = discord.ui.TextInput(
         label="Multiplicador de auto cashout",
-        placeholder="Ej: 2.0 — cobra automáticamente a x2.0",
+        placeholder="Ej: 2.0 → cobra automáticamente a x2.0",
         required=True
     )
     amount_input = discord.ui.TextInput(
         label="Cantidad (opcional si ya apostaste)",
-        placeholder="Ej: 1m — deja vacío para mantener la apuesta",
+        placeholder="Ej: 1m — deja vacío para mantener",
         required=False
     )
 
@@ -207,7 +206,7 @@ class AutoCashoutModal(discord.ui.Modal, title="⚙️ Auto Cashout"):
         uid  = str(interaction.user.id)
 
         if game.state != CrashGame.BETTING:
-            await interaction.response.send_message("La betting window ha cerrado.", ephemeral=True)
+            await interaction.response.defer()
             return
 
         try:
@@ -251,14 +250,7 @@ class AutoCashoutModal(discord.ui.Modal, title="⚙️ Auto Cashout"):
             )
             return
 
-        bet_amount = game.bets[uid].amount
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                description=f"⚙️ Auto cashout activado a **x{auto_mult:.2f}** · Apuesta: {fmt_gems(bet_amount)}",
-                color=COLOR_INFO
-            ),
-            ephemeral=True
-        )
+        await interaction.response.defer()
 
 
 class Crash(commands.Cog):
@@ -275,44 +267,37 @@ class Crash(commands.Cog):
 
     def _build_betting_embed(self, seconds_left: int) -> discord.Embed:
         embed = discord.Embed(
-            title="🚀 CRASH — Betting Window",
-            description=(
-                f"**{seconds_left}s** para apostar\n"
-                f"Pulsa 🚀 **Apostar** o ⚙️ **Auto Cashout**"
-            ),
+            title="🚀 CRASH",
+            description=f"**{seconds_left}s** para apostar · Pulsa 🚀 **Apostar**",
             color=COLOR_INFO
         )
         if self.game.bets:
             lines = []
             for uid, bet in list(self.game.bets.items())[:15]:
                 auto = f" ⚙️ x{bet.auto_cashout:.2f}" if bet.auto_cashout else ""
-                lines.append(f"{bet.user.mention} — {fmt_gems(bet.amount)}{auto}")
+                lines.append(f"**{bet.user.display_name}** — {fmt_gems(bet.amount)}{auto}")
             embed.add_field(
-                name=f"👥 Jugadores ({len(self.game.bets)})",
+                name=f"👥 {len(self.game.bets)} jugadores",
                 value="\n".join(lines),
                 inline=False
             )
         return embed
 
     def _build_running_embed(self) -> discord.Embed:
-        mult  = self.game.multiplier
-        # Color: amarillo < 2x, verde 2-5x, naranja > 5x
+        mult = self.game.multiplier
+
         if mult < 2.0:
             color = COLOR_GOLD
         elif mult < 5.0:
             color = 0x00CC44
         else:
-            color = 0xFF6600
+            color = 0xFF4400
 
-        # Barra de progreso (log scale, máx visual ~10x)
-        prog = min(int((math.log10(max(mult, 1.01))) * 10), 20)
+        # Barra visual (log scale)
+        prog = min(int(math.log10(max(mult, 1.01)) * 12), 20)
         bar  = "🚀" + "═" * prog + "💫"
 
-        embed = discord.Embed(
-            title=f"🚀 x{mult:.2f}",
-            description=bar,
-            color=color
-        )
+        embed = discord.Embed(title=f"🚀  x{mult:.2f}", description=bar, color=color)
 
         active, cashed = [], []
         for uid, bet in self.game.bets.items():
@@ -329,14 +314,14 @@ class Crash(commands.Cog):
         if cashed:
             embed.add_field(name="Cobrado", value="\n".join(cashed[:10]), inline=False)
 
-        embed.set_footer(text="Pulsa 💰 Cashout para cobrar")
+        embed.set_footer(text="💰 Cashout para cobrar")
         return embed
 
     def _build_crash_embed(self) -> discord.Embed:
-        cp = self.game.crash_point
+        cp    = self.game.crash_point
         embed = discord.Embed(
-            title=f"💥 CRASH a x{cp:.2f}",
-            description="El cohete ha explotado · Nueva ronda en 2s",
+            title=f"💥  x{cp:.2f}",
+            description="El cohete ha explotado",
             color=COLOR_ERROR
         )
         winners, losers = [], []
@@ -370,7 +355,6 @@ class Crash(commands.Cog):
     async def _run_cycle(self):
         self._loop.stop()
         try:
-            # Obtener canal de crash
             ch_id = await self.bot.db.get_config("crash_channel")
             if not ch_id:
                 await asyncio.sleep(5)
@@ -406,7 +390,6 @@ class Crash(commands.Cog):
                 except Exception:
                     pass
 
-            # Sin apuestas → skip silencioso
             if not self.game.bets:
                 try:
                     await msg.delete()
@@ -418,14 +401,17 @@ class Crash(commands.Cog):
             self.game.state      = CrashGame.RUNNING
             self.game.multiplier = 1.00
             crash_view           = CrashView(self)
-
             await msg.edit(embed=self._build_running_embed(), view=crash_view)
 
-            # Sube 0.01 cada TICK_INTERVAL segundos
+            elapsed       = 0.0
+            last_display  = 0.0
+
             while self.game.multiplier < self.game.crash_point:
                 await asyncio.sleep(TICK_INTERVAL)
+                elapsed += TICK_INTERVAL
 
-                self.game.multiplier = round(self.game.multiplier + MULT_INCREMENT, 2)
+                # Crecimiento exponencial estilo Stake
+                self.game.multiplier = mult_at(elapsed)
                 if self.game.multiplier > self.game.crash_point:
                     self.game.multiplier = self.game.crash_point
 
@@ -441,10 +427,13 @@ class Crash(commands.Cog):
                         await self.bot.db.add_balance(uid, payout)
                         await self.bot.db.log_game(uid, "crash", bet.amount, "win", profit)
 
-                try:
-                    await msg.edit(embed=self._build_running_embed())
-                except Exception:
-                    pass
+                # Actualiza Discord cada DISPLAY_EVERY segundos
+                if elapsed - last_display >= DISPLAY_EVERY:
+                    last_display = elapsed
+                    try:
+                        await msg.edit(embed=self._build_running_embed())
+                    except Exception:
+                        pass
 
             # ── CRASHED ───────────────────────────────────────
             self.game.state = CrashGame.CRASHED
@@ -459,7 +448,7 @@ class Crash(commands.Cog):
                     await self.bot.db.log_game(uid, "crash", bet.amount, "lose", -bet.amount)
 
             await msg.edit(embed=self._build_crash_embed(), view=None)
-            await asyncio.sleep(CRASH_PAUSE)   # 2 segundos y nueva ronda
+            await asyncio.sleep(CRASH_PAUSE)
             try:
                 await msg.delete()
             except Exception:
@@ -470,32 +459,19 @@ class Crash(commands.Cog):
         finally:
             self._loop.restart()
 
-    # ── Comando de estado ─────────────────────────────────────
-
     @app_commands.command(name="crash_status", description="Ver el estado actual del juego Crash")
     async def crash_status(self, interaction: discord.Interaction):
         game = self.game
-        if game.state == CrashGame.IDLE:
-            await interaction.response.send_message(
-                embed=discord.Embed(description="El canal de Crash no está configurado.", color=COLOR_ERROR),
-                ephemeral=True
-            )
-        elif game.state == CrashGame.BETTING:
+        if game.state in (CrashGame.IDLE, CrashGame.BETTING):
             ch_id = await self.bot.db.get_config("crash_channel")
             link  = f"https://discord.com/channels/{interaction.guild_id}/{ch_id}" if ch_id else "no configurado"
             await interaction.response.send_message(
-                embed=discord.Embed(
-                    description=f"🎲 Betting window activa → [ir al canal]({link})",
-                    color=COLOR_INFO
-                ),
+                embed=discord.Embed(description=f"🎲 Betting window → [ir al canal]({link})", color=COLOR_INFO),
                 ephemeral=True
             )
         else:
             await interaction.response.send_message(
-                embed=discord.Embed(
-                    description=f"🚀 Crash en curso — **x{game.multiplier:.2f}**",
-                    color=COLOR_GOLD
-                ),
+                embed=discord.Embed(description=f"🚀 **x{game.multiplier:.2f}**", color=COLOR_GOLD),
                 ephemeral=True
             )
 

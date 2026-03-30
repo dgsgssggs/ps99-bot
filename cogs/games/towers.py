@@ -1,11 +1,19 @@
-# cogs/games/towers.py — Juego de Torres
 # ============================================================
-# Una torre de 8 pisos. Cada piso tiene N columnas con 1 mina.
-# El jugador elige columna en cada piso. Si acierta sube.
-# Si pisa la mina pierde todo. Puede cobrar en cualquier piso.
-# Dificultades: Fácil (4 col, 1 mina), Normal (3 col, 1 mina),
-#               Difícil (2 col, 1 mina), Extremo (2 col, 2 minas no → 1 safe)
-# House edge aplicado al multiplicador.
+# cogs/games/towers.py — Torres (estilo Mines con grid de botones)
+# ============================================================
+# Visual: 4 filas de botones visibles a la vez + fila de cashout.
+#
+# Ventana deslizante:
+#   Row 0 (top)  → piso actual+2  (futuro,   🔒)
+#   Row 1        → piso actual+1  (futuro,   🔒)
+#   Row 2        → piso actual    (ACTIVO,   ⬜)
+#   Row 3        → piso actual-1  (pasado,   ✅/⬛) o suelo (🟩)
+#   Row 4        → 💰 Cobrar
+#
+# Cuando el jugador sube un piso, la ventana se desplaza:
+#   el piso completado queda en row 3, el nuevo piso activo en row 2.
+#
+# Pisos: 8  |  Dificultades: fácil 4 col, normal 3 col, difícil 2 col
 # ============================================================
 
 import discord
@@ -19,43 +27,47 @@ from utils import (
     COLOR_GOLD, COLOR_ERROR, COLOR_INFO, COLOR_PURPLE
 )
 
-FLOORS     = 8      # Pisos totales
-DIFF_COLS  = {"easy": 4, "normal": 3, "hard": 2}   # columnas por piso
-DIFF_NAMES = {"easy": "Fácil (1/4)", "normal": "Normal (1/3)", "hard": "Difícil (1/2)"}
+FLOORS    = 8
+DIFF_COLS = {"easy": 4, "normal": 3, "hard": 2}
 
-def tower_multiplier(floor: int, cols: int, edge: float) -> float:
+
+def tower_multiplier(floors_cleared: int, cols: int, edge: float) -> float:
     """
-    Multiplicador acumulado al llegar al piso `floor`.
-    Prob de sobrevivir floor pisos = ((cols-1)/cols)^floor
-    Fair payout = 1/prob. Adjusted = fair * (1-edge/100)
+    Multiplicador acumulado tras completar `floors_cleared` pisos.
+    P(sobrevivir N pisos) = ((cols-1)/cols)^N
+    Payout = (1/P) * (1-edge/100)
     """
-    if floor == 0:
+    if floors_cleared == 0:
         return 1.0
-    survive_prob = ((cols - 1) / cols) ** floor
-    if survive_prob <= 0:
+    p = ((cols - 1) / cols) ** floors_cleared
+    if p <= 0:
         return 1.0
-    fair = 1.0 / survive_prob
-    return round(fair * (1 - edge / 100), 2)
+    return round((1.0 / p) * (1 - edge / 100), 2)
 
 
 class TowerGame:
+    """
+    Estado de la partida.
+    self.floor  = número de pisos COMPLETADOS (0 = ninguno).
+    Para elegir el siguiente piso, el jugador está en floor+1.
+    """
+
     def __init__(self, player, bet: int, cols: int, edge: float):
         self.player    = player
         self.player_id = player.id
         self.bet       = bet
         self.cols      = cols
         self.edge      = edge
-        self.floor     = 0          # Piso actual (0 = base)
-        self.mine_positions = []    # Posición de la mina en cada piso (0-indexed)
-        self.revealed  = {}         # {floor: col_elegida}
+        self.floor     = 0          # pisos completados
         self.alive     = True
         self.cashed    = False
         self.message   = None
         self.cog       = None
 
-        # Pre-genera minas para todos los pisos
-        for _ in range(FLOORS):
-            self.mine_positions.append(_rng.randint(0, cols - 1))
+        # Pre-genera mina para cada piso (índice 1 = piso 1, ..., 8 = piso 8)
+        self.mine = {f: _rng.randint(0, cols - 1) for f in range(1, FLOORS + 1)}
+        # Historial de columnas elegidas: {piso: col_elegida}
+        self.choices: dict[int, int] = {}
 
     def current_mult(self) -> float:
         return tower_multiplier(self.floor, self.cols, self.edge)
@@ -64,82 +76,142 @@ class TowerGame:
         return tower_multiplier(self.floor + 1, self.cols, self.edge)
 
     def build_embed(self, result_text: str = None) -> discord.Embed:
-        pot     = int(round(self.bet * self.current_mult(), 0))
-        nxt_pot = int(round(self.bet * self.next_mult(), 0))
+        pot = int(round(self.bet * self.current_mult(), 0))
 
-        color = COLOR_PURPLE
-        if result_text:
-            color = COLOR_GOLD if "cobrado" in result_text.lower() or "✅" in result_text else COLOR_ERROR
+        if result_text and ("💥" in result_text or "❌" in result_text):
+            color = COLOR_ERROR
+        elif result_text and ("✅" in result_text or "💰" in result_text):
+            color = COLOR_GOLD
+        else:
+            color = COLOR_PURPLE
+
+        active_floor = self.floor + 1
+        diff_names   = {"easy": "Fácil", "normal": "Normal", "hard": "Difícil"}
 
         embed = discord.Embed(title=f"🏰 Torres — {self.player.display_name}", color=color)
-        embed.add_field(name="Apuesta",       value=fmt_gems(self.bet),                    inline=True)
-        embed.add_field(name="Piso",          value=f"**{self.floor}/{FLOORS}**",           inline=True)
-        embed.add_field(name="Mult actual",   value=f"x{self.current_mult():.2f}",          inline=True)
-        embed.add_field(name="Si cobras",     value=fmt_gems(pot),                          inline=True)
-        if self.alive and self.floor < FLOORS:
-            embed.add_field(name="Siguiente piso", value=fmt_gems(nxt_pot),                inline=True)
+        embed.add_field(name="Apuesta",     value=fmt_gems(self.bet),                inline=True)
+        embed.add_field(name="Piso",        value=f"**{self.floor}/{FLOORS}**",       inline=True)
+        embed.add_field(name="Multiplicador", value=f"x{self.current_mult():.2f}",   inline=True)
+        embed.add_field(name="💰 Si cobras", value=fmt_gems(pot),                    inline=True)
 
-        # Visual tower (muestra pisos completados)
-        tower_str = ""
-        for f in range(FLOORS, 0, -1):
-            if f > self.floor:
-                tower_str += f"Piso {f}: {'🟦 ' * self.cols}\n"
-            elif f == self.floor and self.alive and not self.cashed:
-                tower_str += f"Piso {f}: **← AQUÍ**\n"
-            else:
-                chosen = self.revealed.get(f)
-                mine   = self.mine_positions[f - 1]
-                row    = ""
-                for c in range(self.cols):
-                    if not self.alive and f == self.floor and c == mine:
-                        row += "💥"
-                    elif chosen == c:
-                        row += "✅"
-                    elif not self.alive and c == mine:
-                        row += "💣"
-                    else:
-                        row += "⬛"
-                tower_str += f"Piso {f}: {row}\n"
-
-        embed.add_field(name="Torre", value=tower_str or "—", inline=False)
+        if self.alive and not self.cashed and self.floor < FLOORS:
+            nxt = int(round(self.bet * self.next_mult(), 0))
+            embed.add_field(name="Siguiente piso", value=fmt_gems(nxt),              inline=True)
 
         if result_text:
             embed.add_field(name="Resultado", value=result_text, inline=False)
+
         return embed
 
 
 class TowerView(discord.ui.View):
+    """
+    Grid deslizante de 4 filas:
+      Row 0 → piso active+2 (locked)
+      Row 1 → piso active+1 (locked)
+      Row 2 → piso active   (ACTIVE — ⬜ clickeable)
+      Row 3 → piso active-1 (cleared: ✅/⬛) o suelo (🟩)
+      Row 4 → 💰 Cobrar
+    """
+
     def __init__(self, game: TowerGame):
         super().__init__(timeout=300)
         self.game = game
-        self._build_buttons()
+        self._rebuild()
 
-    def _build_buttons(self):
+    def _rebuild(self):
         self.clear_items()
-        if not self.game.alive or self.game.cashed or self.game.floor >= FLOORS:
+        game = self.game
+
+        if not game.alive or game.cashed:
             return
 
-        cols = self.game.cols
-        labels = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
-        for c in range(cols):
-            btn = discord.ui.Button(
-                label=f"Columna {c+1}",
-                emoji=labels[c],
-                style=discord.ButtonStyle.primary,
-                custom_id=f"tower_col_{c}"
-            )
-            btn.callback = self._make_col_callback(c)
-            self.add_item(btn)
+        active = game.floor + 1   # piso a elegir ahora
+        cols   = game.cols
 
+        # Calcula qué piso va en cada fila (row 0 = arriba = más alto visualmente)
+        floor_in_row = {
+            0: active + 2,   # futuro  (2 arriba del activo)
+            1: active + 1,   # futuro  (1 arriba del activo)
+            2: active,       # ACTIVO
+            3: active - 1,   # pasado o suelo (0 = suelo)
+        }
+
+        for row_idx, floor_num in floor_in_row.items():
+            if floor_num > FLOORS:
+                # Piso inexistente — fila vacía (no añade botones)
+                continue
+
+            if floor_num < 0:
+                continue
+
+            if floor_num == 0:
+                # Suelo — tiles verdes desactivados como referencia visual
+                for c in range(cols):
+                    btn = discord.ui.Button(
+                        label    = "🟩",
+                        style    = discord.ButtonStyle.secondary,
+                        disabled = True,
+                        row      = row_idx,
+                        custom_id= f"ground_{c}"
+                    )
+                    self.add_item(btn)
+
+            elif floor_num < active:
+                # Piso ya completado — muestra resultado
+                chosen = game.choices.get(floor_num)
+                for c in range(cols):
+                    if c == chosen:
+                        label = "✅"
+                        style = discord.ButtonStyle.success
+                    else:
+                        label = "⬛"
+                        style = discord.ButtonStyle.secondary
+                    btn = discord.ui.Button(
+                        label    = label,
+                        style    = style,
+                        disabled = True,
+                        row      = row_idx,
+                        custom_id= f"done_{floor_num}_{c}"
+                    )
+                    self.add_item(btn)
+
+            elif floor_num == active:
+                # Piso activo — botones clickeables
+                for c in range(cols):
+                    btn = discord.ui.Button(
+                        label    = "⬜",
+                        style    = discord.ButtonStyle.primary,
+                        row      = row_idx,
+                        custom_id= f"pick_{floor_num}_{c}"
+                    )
+                    btn.callback = self._make_pick(c)
+                    self.add_item(btn)
+
+            else:
+                # Piso futuro — bloqueado
+                for c in range(cols):
+                    btn = discord.ui.Button(
+                        label    = "🔒",
+                        style    = discord.ButtonStyle.secondary,
+                        disabled = True,
+                        row      = row_idx,
+                        custom_id= f"future_{floor_num}_{c}"
+                    )
+                    self.add_item(btn)
+
+        # Cashout (row 4)
+        pot = int(round(game.bet * game.current_mult(), 0))
         cashout_btn = discord.ui.Button(
-            label=f"💰 Cobrar x{self.game.current_mult():.2f}",
-            style=discord.ButtonStyle.success,
-            custom_id="tower_cashout"
+            label    = f"💰 Cobrar  {fmt_gems(pot)}  ·  x{game.current_mult():.2f}",
+            style    = discord.ButtonStyle.success,
+            row      = 4,
+            custom_id= "tower_cashout"
         )
-        cashout_btn.callback = self._cashout_callback
+        cashout_btn.callback = self._cashout_cb
         self.add_item(cashout_btn)
 
-    def _make_col_callback(self, col: int):
+    def _make_pick(self, col: int):
         async def callback(interaction: discord.Interaction):
             if interaction.user.id != self.game.player_id:
                 await interaction.response.send_message("Esta no es tu partida.", ephemeral=True)
@@ -148,22 +220,21 @@ class TowerView(discord.ui.View):
         return callback
 
     async def _pick(self, interaction: discord.Interaction, col: int):
-        game = self.game
-        mine = game.mine_positions[game.floor]  # piso actual (0-indexed)
+        game         = self.game
+        active_floor = game.floor + 1
+        mine_col     = game.mine[active_floor]
 
-        game.revealed[game.floor + 1] = col     # guarda para visualización
-        game.floor += 1
+        game.choices[active_floor] = col
 
-        if col == mine:
-            # Hit mine
+        if col == mine_col:
+            # 💥 Mina
             game.alive = False
             game.cog.active_games.pop(game.player_id, None)
 
             # Rakeback
-            edge_pct = game.edge
-            house_p  = int(game.bet * edge_pct / 100)
-            rb_pct   = float(await game.cog.bot.db.get_config("rakeback_pct") or "20")
-            rb_amt   = int(house_p * rb_pct / 100)
+            house_p = int(game.bet * game.edge / 100)
+            rb_pct  = float(await game.cog.bot.db.get_config("rakeback_pct") or "20")
+            rb_amt  = int(house_p * rb_pct / 100)
             if rb_amt > 0:
                 await game.cog.bot.db.add_rakeback(str(game.player_id), rb_amt)
 
@@ -172,22 +243,81 @@ class TowerView(discord.ui.View):
             if member:
                 await update_wager_roles(game.cog.bot, interaction.guild, member)
 
-            for item in self.children:
-                item.disabled = True
-            embed = game.build_embed("💥 ¡Pisaste una mina! Perdiste todo.")
-            await interaction.response.edit_message(embed=embed, view=self)
+            # Revela la mina en el botón clickeado → muestra 💥 en embed
+            result_text = f"💥 **¡Mina en piso {active_floor}!** Perdiste {fmt_gems(game.bet)}"
+            # Marca el botón del piso activo para mostrar ✅/💥
+            game.choices[active_floor] = col  # ya guardado
 
-        elif game.floor >= FLOORS:
-            # Completed all floors - auto cashout
-            await self._do_cashout(interaction)
+            # Reconstruye con todo desactivado + muestra resultado
+            self._show_explosion(active_floor, col, mine_col)
+            embed = game.build_embed(result_text)
+            await interaction.response.edit_message(embed=embed, view=self)
 
         else:
-            # Safe - continue
-            self._build_buttons()
-            embed = game.build_embed(f"✅ ¡Seguro! Sube al piso {game.floor}")
+            # ✅ Seguro — sube un piso
+            game.floor += 1
+
+            if game.floor >= FLOORS:
+                # Completó todos los pisos — cobra automáticamente
+                await self._do_cashout(interaction)
+                return
+
+            self._rebuild()
+            result_text = f"✅ Piso {active_floor} superado · Multiplicador: x{game.current_mult():.2f}"
+            embed = game.build_embed(result_text)
             await interaction.response.edit_message(embed=embed, view=self)
 
-    async def _cashout_callback(self, interaction: discord.Interaction):
+    def _show_explosion(self, exploded_floor: int, chosen: int, mine: int):
+        """Reconstruye la vista mostrando la explosión y desactivando todo."""
+        self.clear_items()
+        game   = self.game
+        active = exploded_floor
+        cols   = game.cols
+
+        floor_in_row = {
+            0: active + 2,
+            1: active + 1,
+            2: active,       # este es el piso donde explotó
+            3: active - 1,
+        }
+
+        for row_idx, floor_num in floor_in_row.items():
+            if floor_num > FLOORS or floor_num < 0:
+                continue
+
+            if floor_num == 0:
+                for c in range(cols):
+                    self.add_item(discord.ui.Button(label="🟩", style=discord.ButtonStyle.secondary,
+                                                     disabled=True, row=row_idx, custom_id=f"gnd_{c}"))
+
+            elif floor_num < active:
+                ch = game.choices.get(floor_num)
+                for c in range(cols):
+                    label = "✅" if c == ch else "⬛"
+                    style = discord.ButtonStyle.success if c == ch else discord.ButtonStyle.secondary
+                    self.add_item(discord.ui.Button(label=label, style=style, disabled=True,
+                                                     row=row_idx, custom_id=f"d_{floor_num}_{c}"))
+
+            elif floor_num == active:
+                # Muestra la explosión
+                for c in range(cols):
+                    if c == mine:
+                        label = "💥"
+                        style = discord.ButtonStyle.danger
+                    elif c == chosen and chosen != mine:
+                        label = "✅"
+                        style = discord.ButtonStyle.success
+                    else:
+                        label = "⬛"
+                        style = discord.ButtonStyle.secondary
+                    self.add_item(discord.ui.Button(label=label, style=style, disabled=True,
+                                                     row=row_idx, custom_id=f"exp_{c}"))
+            else:
+                for c in range(cols):
+                    self.add_item(discord.ui.Button(label="🔒", style=discord.ButtonStyle.secondary,
+                                                     disabled=True, row=row_idx, custom_id=f"fut_{floor_num}_{c}"))
+
+    async def _cashout_cb(self, interaction: discord.Interaction):
         if interaction.user.id != self.game.player_id:
             await interaction.response.send_message("Esta no es tu partida.", ephemeral=True)
             return
@@ -208,27 +338,33 @@ class TowerView(discord.ui.View):
         if member:
             await update_wager_roles(game.cog.bot, interaction.guild, member)
 
+        new_bal = await game.cog.bot.db.get_balance(str(game.player_id))
+        result_text = f"💰 **Cobrado x{mult:.2f}** — {fmt_gems(payout)} (+{fmt_gems(profit)})"
+
+        self._rebuild()
+        # Desactiva todos los botones excepto los ya desactivados
         for item in self.children:
             item.disabled = True
-        new_bal = await game.cog.bot.db.get_balance(str(game.player_id))
-        embed   = game.build_embed(f"✅ Cobrado {fmt_gems(payout)} (x{mult:.2f})")
+
+        embed = game.build_embed(result_text)
         embed.set_footer(text=f"Saldo: {fmt_gems(new_bal)}")
         await interaction.response.edit_message(embed=embed, view=self)
 
     async def on_timeout(self):
         game = self.game
         game.cog.active_games.pop(game.player_id, None)
-        # Return bet if they haven't climbed at all, otherwise auto-cashout
+
+        # Auto-cobrar si hay multiplicador ganado, devolver si no
         if game.floor > 0 and game.alive:
-            mult   = game.current_mult()
-            payout = int(round(game.bet * mult, 0))
+            payout = int(round(game.bet * game.current_mult(), 0))
             await game.cog.bot.db.add_balance(str(game.player_id), payout)
         elif game.floor == 0:
             await game.cog.bot.db.add_balance(str(game.player_id), game.bet)
+
         for item in self.children:
             item.disabled = True
         try:
-            embed = game.build_embed("⏰ Tiempo agotado — se cobró automáticamente")
+            embed = game.build_embed("⏰ Tiempo agotado — cobrado automáticamente")
             if game.message:
                 await game.message.edit(embed=embed, view=self)
         except Exception:
@@ -243,19 +379,19 @@ class Towers(commands.Cog):
     @app_commands.command(name="towers", description="Sube la torre evitando las minas en cada piso")
     @app_commands.describe(
         apuesta="Gemas a apostar",
-        dificultad="Dificultad de la torre"
+        dificultad="Columnas por piso (más columnas = más fácil)"
     )
     @app_commands.choices(dificultad=[
-        app_commands.Choice(name="Fácil   — 4 columnas, 1 mina (75% por piso)",  value="easy"),
-        app_commands.Choice(name="Normal  — 3 columnas, 1 mina (67% por piso)",  value="normal"),
-        app_commands.Choice(name="Difícil — 2 columnas, 1 mina (50% por piso)",  value="hard"),
+        app_commands.Choice(name="Fácil   — 4 columnas (75% por piso)", value="easy"),
+        app_commands.Choice(name="Normal  — 3 columnas (67% por piso)", value="normal"),
+        app_commands.Choice(name="Difícil — 2 columnas (50% por piso)", value="hard"),
     ])
     async def towers(self, interaction: discord.Interaction, apuesta: str, dificultad: str = "normal"):
         if not await check_linked(interaction):
             return
 
-        apuesta = parse_amount(str(apuesta))
-        if not apuesta or apuesta <= 0:
+        amount = parse_amount(str(apuesta))
+        if not amount or amount <= 0:
             await interaction.response.send_message(embed=error_embed("Apuesta inválida."), ephemeral=True)
             return
 
@@ -265,26 +401,25 @@ class Towers(commands.Cog):
             )
             return
 
-        if not await check_balance(interaction, apuesta):
+        if not await check_balance(interaction, amount):
             return
 
         user_id = str(interaction.user.id)
-        await self.bot.db.remove_balance(user_id, apuesta)
-        await self.bot.db.add_wager(user_id, apuesta)
-        await self.bot.db.reduce_wager_requirement(user_id, apuesta)
+        await self.bot.db.remove_balance(user_id, amount)
+        await self.bot.db.add_wager(user_id, amount)
+        await self.bot.db.reduce_wager_requirement(user_id, amount)
 
         edge = await self.bot.db.get_house_edge("towers")
         cols = DIFF_COLS.get(dificultad, 3)
 
-        game      = TowerGame(interaction.user, apuesta, cols, edge)
-        game.cog  = self
+        game     = TowerGame(interaction.user, amount, cols, edge)
+        game.cog = self
         self.active_games[interaction.user.id] = game
 
         embed = game.build_embed()
         view  = TowerView(game)
         await interaction.response.send_message(embed=embed, view=view)
-        msg = await interaction.original_response()
-        game.message = msg
+        game.message = await interaction.original_response()
 
 
 async def setup(bot):
